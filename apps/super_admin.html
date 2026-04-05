@@ -1,0 +1,520 @@
+﻿<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BERNAS MBG - Super Admin Command Center</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #050b1f;
+      --panel: #0f1a3d;
+      --line: #273b72;
+      --accent: #24c9ff;
+    }
+    body {
+      margin: 0;
+      font-family: 'Manrope', sans-serif;
+      background:
+        radial-gradient(circle at 12% 8%, rgba(36, 201, 255, 0.16), transparent 34%),
+        radial-gradient(circle at 85% 12%, rgba(52, 211, 153, 0.12), transparent 36%),
+        linear-gradient(145deg, #030817, #08142f 55%, #0a1737);
+      color: #dbeafe;
+      min-height: 100vh;
+    }
+    .mono { font-family: 'IBM Plex Mono', monospace; }
+    .card {
+      background: linear-gradient(155deg, rgba(15, 26, 61, 0.92), rgba(10, 20, 50, 0.9));
+      border: 1px solid var(--line);
+      box-shadow: 0 20px 50px rgba(2, 8, 24, 0.35);
+    }
+    .live-dot { animation: pulse 1.4s ease-in-out infinite; }
+    @keyframes pulse {
+      0%,100% { transform: scale(0.9); opacity: 0.55; }
+      50% { transform: scale(1.1); opacity: 1; }
+    }
+    .table th, .table td { padding: 8px; font-size: 12px; border-bottom: 1px solid rgba(71, 85, 140, 0.45); text-align: left; }
+    .table th { color: #9fb5dc; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useMemo, useState } = React;
+
+    const seedUsers = [
+      { id: "USR-001", name: "Rina", email: "rina@bernas.id", role: "Portal Admin", status: "active", lastLogin: "2026-04-05 08:12" },
+      { id: "USR-002", name: "Bagas", email: "bagas@bernas.id", role: "Manager", status: "active", lastLogin: "2026-04-05 07:53" },
+      { id: "USR-003", name: "Nadia", email: "nadia@bernas.id", role: "Customer Service", status: "suspended", lastLogin: "2026-04-04 21:01" }
+    ];
+
+    const seedRoles = {
+      "Portal Admin": ["dashboard.view", "users.crud", "roles.manage", "config.manage", "logs.view", "backup.manage"],
+      "Manager": ["dashboard.view", "users.read", "masterdata.manage", "logs.view"],
+      "Content Writer": ["dashboard.view", "masterdata.read"],
+      "Customer Service": ["dashboard.view", "users.read", "users.assist"]
+    };
+
+    const seedAudit = [
+      { at: "2026-04-05 09:12", actor: "SuperAdmin", action: "UPDATE_USER", detail: "Suspend akun USR-003", ip: "36.81.xx.xx", agent: "Chrome/123 Windows" },
+      { at: "2026-04-05 09:03", actor: "SuperAdmin", action: "UPDATE_CONFIG", detail: "SMTP host diganti", ip: "36.81.xx.xx", agent: "Chrome/123 Windows" },
+      { at: "2026-04-05 08:55", actor: "Admin-Rina", action: "MASTERDATA_IMPORT", detail: "Import 12 kategori", ip: "114.10.xx.xx", agent: "Edge/122 Windows" }
+    ];
+
+    const seedMasterData = {
+      categories: ["Menu Karbo", "Menu Protein", "Menu Sayur", "Menu Buah"],
+      regions: ["DKI Jakarta", "Jawa Barat", "Jawa Tengah", "DIY"],
+      operationalStatus: ["MenungguUpload", "DalamPengiriman", "TibaDiSekolah", "Investigasi"]
+    };
+
+    const seedSessions = [
+      { id: "SES-001", user: "Rina", device: "Windows Chrome", ip: "36.81.xx.xx", location: "Jakarta", active: true },
+      { id: "SES-002", user: "Bagas", device: "Mac Safari", ip: "114.10.xx.xx", location: "Bandung", active: true },
+      { id: "SES-003", user: "Nadia", device: "Android App", ip: "182.2.xx.xx", location: "Bogor", active: false }
+    ];
+
+    const seedSystemAlerts = [
+      { level: "HIGH", text: "Gagal sinkron SMTP pada node-2", at: "09:11" },
+      { level: "MEDIUM", text: "Lonjakan login tidak biasa dari 1 IP", at: "08:47" },
+      { level: "LOW", text: "Queue laporan meningkat 17%", at: "08:30" }
+    ];
+
+    function App() {
+      const [tab, setTab] = useState("dashboard");
+      const [users, setUsers] = useState(seedUsers);
+      const [roles, setRoles] = useState(seedRoles);
+      const [auditLogs, setAuditLogs] = useState(seedAudit);
+      const [masterData, setMasterData] = useState(seedMasterData);
+      const [sessions, setSessions] = useState(seedSessions);
+      const [alerts, setAlerts] = useState(seedSystemAlerts);
+      const [newUser, setNewUser] = useState({ name: "", email: "", role: "Portal Admin" });
+      const [editingId, setEditingId] = useState(null);
+      const [bulkInput, setBulkInput] = useState("");
+
+      const [systemConfig, setSystemConfig] = useState({
+        siteName: "BERNAS MBG",
+        siteLogo: "BERNAS",
+        timezone: "Asia/Jakarta",
+        language: "id",
+        googleAnalyticsKey: "GA-XXXX-01",
+        smsOtpKey: "sms_live_xxx",
+        paymentGatewayKey: "pg_live_xxx",
+        smtpHost: "smtp.bernas.id",
+        smtpPort: "587",
+        smtpUser: "noreply@bernas.id"
+      });
+
+      const [backupConfig, setBackupConfig] = useState({ autoBackup: true, schedule: "03:00", lastBackup: "2026-04-05 03:00" });
+      const [range, setRange] = useState("mingguan");
+
+      const addLog = (action, detail) => {
+        const now = new Date();
+        const row = {
+          at: now.toLocaleString("id-ID"),
+          actor: "SuperAdmin",
+          action,
+          detail,
+          ip: "36.81.xx.xx",
+          agent: "Chrome/123 Windows"
+        };
+        setAuditLogs((prev) => [row, ...prev].slice(0, 200));
+      };
+
+      const stats = useMemo(() => {
+        const active = users.filter((u) => u.status === "active").length;
+        const suspended = users.filter((u) => u.status !== "active").length;
+        const newUsers = Math.max(2, Math.floor(users.length / 2));
+        const revenue = 182500000;
+        const traffic = 48672;
+        return { active, suspended, newUsers, revenue, traffic };
+      }, [users]);
+
+      const activitySeries = useMemo(() => {
+        if (range === "harian") return [42, 57, 49, 64, 71, 68, 73];
+        if (range === "bulanan") return [420, 460, 510, 548, 590, 620, 640];
+        return [130, 160, 172, 184, 210, 198, 225];
+      }, [range]);
+
+      const createUser = () => {
+        if (!newUser.name.trim() || !newUser.email.trim()) return;
+        const row = {
+          id: `USR-${String(Date.now()).slice(-4)}`,
+          name: newUser.name.trim(),
+          email: newUser.email.trim(),
+          role: newUser.role,
+          status: "active",
+          lastLogin: "-"
+        };
+        setUsers((prev) => [row, ...prev]);
+        addLog("CREATE_USER", `Membuat akun ${row.id}`);
+        setNewUser({ name: "", email: "", role: "Portal Admin" });
+      };
+
+      const deleteUser = (id) => {
+        setUsers((prev) => prev.filter((u) => u.id !== id));
+        addLog("DELETE_USER", `Menghapus akun ${id}`);
+      };
+
+      const toggleSuspend = (id) => {
+        setUsers((prev) => prev.map((u) => u.id === id ? { ...u, status: u.status === "active" ? "suspended" : "active" } : u));
+        addLog("SUSPEND_USER", `Toggle suspend akun ${id}`);
+      };
+
+      const resetPassword = (id) => {
+        addLog("RESET_PASSWORD", `Mengirim link reset untuk ${id}`);
+        alert(`Link reset password dikirim untuk ${id}`);
+      };
+
+      const updateRolePerm = (role, perm, checked) => {
+        setRoles((prev) => {
+          const perms = new Set(prev[role] || []);
+          if (checked) perms.add(perm); else perms.delete(perm);
+          return { ...prev, [role]: [...perms] };
+        });
+        addLog("UPDATE_RBAC", `${role} -> ${perm}=${checked}`);
+      };
+
+      const addRole = () => {
+        const name = prompt("Nama role baru:");
+        if (!name) return;
+        if (roles[name]) return alert("Role sudah ada");
+        setRoles((prev) => ({ ...prev, [name]: ["dashboard.view"] }));
+        addLog("CREATE_ROLE", `Membuat role ${name}`);
+      };
+
+      const saveSystemConfig = () => {
+        addLog("SAVE_CONFIG", "Menyimpan konfigurasi global/API/SMTP");
+        alert("Konfigurasi sistem tersimpan");
+      };
+
+      const exportMasterData = () => {
+        const rows = [
+          ["type", "value"],
+          ...masterData.categories.map((x) => ["category", x]),
+          ...masterData.regions.map((x) => ["region", x]),
+          ...masterData.operationalStatus.map((x) => ["operational_status", x])
+        ];
+        const csv = rows.map((r) => r.join(",")).join("\n");
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = "master_data_bernas.csv";
+        link.click();
+        URL.revokeObjectURL(link.href);
+        addLog("EXPORT_MASTERDATA", "Ekspor master data CSV");
+      };
+
+      const importMasterData = () => {
+        if (!bulkInput.trim()) return;
+        const lines = bulkInput.split("\n").map((x) => x.trim()).filter(Boolean);
+        const categories = [];
+        const regions = [];
+        const operationalStatus = [];
+        lines.forEach((line) => {
+          const [t, v] = line.split(",").map((x) => (x || "").trim());
+          if (!t || !v) return;
+          if (t === "category") categories.push(v);
+          if (t === "region") regions.push(v);
+          if (t === "operational_status") operationalStatus.push(v);
+        });
+        setMasterData({
+          categories: categories.length ? categories : masterData.categories,
+          regions: regions.length ? regions : masterData.regions,
+          operationalStatus: operationalStatus.length ? operationalStatus : masterData.operationalStatus
+        });
+        addLog("IMPORT_MASTERDATA", `Import master data (${lines.length} baris)`);
+        setBulkInput("");
+      };
+
+      const runManualBackup = () => {
+        const now = new Date().toLocaleString("id-ID");
+        setBackupConfig((prev) => ({ ...prev, lastBackup: now }));
+        addLog("RUN_BACKUP", `Manual backup pada ${now}`);
+      };
+
+      const forceLogoutSession = (id) => {
+        setSessions((prev) => prev.map((s) => s.id === id ? { ...s, active: false } : s));
+        addLog("FORCE_LOGOUT", `Force logout sesi ${id}`);
+      };
+
+      const tabs = [
+        { id: "dashboard", label: "Main Dashboard" },
+        { id: "users", label: "User Management" },
+        { id: "roles", label: "Role & Permission" },
+        { id: "config", label: "System Configuration" },
+        { id: "logs", label: "Audit Logs" },
+        { id: "master", label: "Master Data" },
+        { id: "security", label: "Security & Backups" }
+      ];
+
+      const permissionCatalog = [
+        "dashboard.view", "users.read", "users.crud", "users.assist", "roles.manage", "config.manage", "logs.view", "masterdata.read", "masterdata.manage", "backup.manage"
+      ];
+
+      return (
+        <div className="min-h-screen p-4 md:p-6">
+          <div className="max-w-[1450px] mx-auto space-y-5">
+            <header className="card rounded-3xl p-5">
+              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                <div>
+                  <div className="inline-flex items-center gap-2 border border-sky-400/30 rounded-full px-3 py-1 text-xs text-sky-200 mb-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 live-dot"></span>
+                    Super Admin Active
+                  </div>
+                  <h1 className="text-2xl md:text-3xl font-extrabold text-white">Super Admin Command Center</h1>
+                  <p className="text-slate-300 text-sm">Kontrol penuh aplikasi: statistik, pengguna, RBAC, konfigurasi, audit, master data, keamanan.</p>
+                </div>
+                <a href="../index.html" className="inline-flex items-center justify-center px-4 py-2 rounded-xl border border-slate-600 text-slate-200 hover:border-slate-400">Kembali Ke Launcher</a>
+              </div>
+            </header>
+
+            <div className="flex flex-wrap gap-2">
+              {tabs.map((t) => (
+                <button key={t.id} onClick={() => setTab(t.id)} className={`px-3 py-2 rounded-xl text-sm border ${tab === t.id ? "border-sky-400/70 bg-sky-500/20 text-sky-100" : "border-slate-700 text-slate-300"}`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            {tab === "dashboard" && (
+              <section className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                  <div className="card rounded-2xl p-3"><p className="text-xs text-slate-400">Pengguna Aktif</p><p className="text-2xl font-bold text-emerald-300 mono">{stats.active}</p></div>
+                  <div className="card rounded-2xl p-3"><p className="text-xs text-slate-400">Pengguna Baru</p><p className="text-2xl font-bold text-sky-300 mono">{stats.newUsers}</p></div>
+                  <div className="card rounded-2xl p-3"><p className="text-xs text-slate-400">Suspend</p><p className="text-2xl font-bold text-amber-300 mono">{stats.suspended}</p></div>
+                  <div className="card rounded-2xl p-3"><p className="text-xs text-slate-400">Pendapatan Bulanan</p><p className="text-xl font-bold text-fuchsia-300 mono">Rp {stats.revenue.toLocaleString("id-ID")}</p></div>
+                  <div className="card rounded-2xl p-3"><p className="text-xs text-slate-400">Traffic Sistem</p><p className="text-2xl font-bold text-cyan-300 mono">{stats.traffic.toLocaleString("id-ID")}</p></div>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                  <div className="card rounded-2xl p-4 lg:col-span-2">
+                    <div className="flex items-center justify-between mb-3">
+                      <h2 className="font-bold text-white">Grafik Aktivitas</h2>
+                      <select value={range} onChange={(e) => setRange(e.target.value)} className="rounded-lg bg-slate-900 border border-slate-700 px-2 py-1 text-sm">
+                        <option value="harian">Harian</option>
+                        <option value="mingguan">Mingguan</option>
+                        <option value="bulanan">Bulanan</option>
+                      </select>
+                    </div>
+                    <div className="h-56 flex items-end gap-3">
+                      {activitySeries.map((v, i) => (
+                        <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                          <div className="w-full rounded-t bg-gradient-to-t from-sky-600 to-cyan-300" style={{ height: `${Math.max(20, (v / Math.max(...activitySeries)) * 180)}px` }}></div>
+                          <span className="text-[10px] text-slate-400">P{i+1}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="card rounded-2xl p-4">
+                    <h2 className="font-bold text-white mb-3">Peringatan Sistem</h2>
+                    <div className="space-y-2">
+                      {alerts.map((a, i) => (
+                        <div key={i} className="rounded-lg border border-slate-700 p-2 bg-slate-900/45">
+                          <p className={`text-[11px] font-bold ${a.level === "HIGH" ? "text-red-300" : a.level === "MEDIUM" ? "text-amber-300" : "text-emerald-300"}`}>{a.level}</p>
+                          <p className="text-xs text-slate-200">{a.text}</p>
+                          <p className="text-[11px] text-slate-400">{a.at}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {tab === "users" && (
+              <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div className="card rounded-2xl p-4">
+                  <h2 className="font-bold text-white mb-3">Tambah / Edit Pengguna</h2>
+                  <div className="space-y-2 text-sm">
+                    <input value={newUser.name} onChange={(e) => setNewUser((p) => ({ ...p, name: e.target.value }))} placeholder="Nama" className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" />
+                    <input value={newUser.email} onChange={(e) => setNewUser((p) => ({ ...p, email: e.target.value }))} placeholder="Email" className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" />
+                    <select value={newUser.role} onChange={(e) => setNewUser((p) => ({ ...p, role: e.target.value }))} className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2">
+                      {Object.keys(roles).map((r) => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                    <button onClick={createUser} className="w-full rounded-lg bg-sky-600 px-3 py-2 font-semibold">Create User</button>
+                    {editingId && <p className="text-xs text-amber-300">Mode edit: {editingId}</p>}
+                  </div>
+                </div>
+
+                <div className="card rounded-2xl p-4 lg:col-span-2 overflow-auto">
+                  <h2 className="font-bold text-white mb-3">CRUD + Blokir/Suspend + Bantuan Akun</h2>
+                  <table className="table w-full">
+                    <thead>
+                      <tr><th>ID</th><th>Nama</th><th>Role</th><th>Status</th><th>Aksi</th></tr>
+                    </thead>
+                    <tbody>
+                      {users.map((u) => (
+                        <tr key={u.id}>
+                          <td className="mono text-slate-300">{u.id}</td>
+                          <td><p className="text-white text-xs font-semibold">{u.name}</p><p className="text-[11px] text-slate-400">{u.email}</p></td>
+                          <td className="text-[11px]">{u.role}</td>
+                          <td><span className={`text-[10px] px-2 py-1 rounded-full ${u.status === "active" ? "bg-emerald-500/20 text-emerald-200" : "bg-red-500/20 text-red-200"}`}>{u.status}</span></td>
+                          <td className="space-x-1">
+                            <button onClick={() => setEditingId(u.id)} className="text-[10px] px-2 py-1 rounded border border-slate-500">Edit</button>
+                            <button onClick={() => toggleSuspend(u.id)} className="text-[10px] px-2 py-1 rounded border border-amber-500/50 bg-amber-500/20">Suspend</button>
+                            <button onClick={() => resetPassword(u.id)} className="text-[10px] px-2 py-1 rounded border border-cyan-500/50 bg-cyan-500/20">Reset Password</button>
+                            <button onClick={() => deleteUser(u.id)} className="text-[10px] px-2 py-1 rounded border border-red-500/50 bg-red-500/20">Delete</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
+
+            {tab === "roles" && (
+              <section className="card rounded-2xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="font-bold text-white">Role & Permission Management (RBAC)</h2>
+                  <button onClick={addRole} className="rounded-lg bg-fuchsia-600 px-3 py-1.5 text-sm font-semibold">Tambah Role</button>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                  {Object.keys(roles).map((role) => (
+                    <div key={role} className="rounded-xl border border-slate-700 p-3 bg-slate-900/45">
+                      <p className="font-semibold text-white mb-2">{role}</p>
+                      <div className="space-y-1 text-xs">
+                        {permissionCatalog.map((perm) => {
+                          const checked = roles[role].includes(perm);
+                          return (
+                            <label key={perm} className="flex items-center gap-2">
+                              <input type="checkbox" checked={checked} onChange={(e) => updateRolePerm(role, perm, e.target.checked)} />
+                              <span className="text-slate-300">{perm}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {tab === "config" && (
+              <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div className="card rounded-2xl p-4 lg:col-span-1">
+                  <h2 className="font-bold text-white mb-3">Pengaturan Global</h2>
+                  <div className="space-y-2 text-sm">
+                    <input value={systemConfig.siteName} onChange={(e) => setSystemConfig((p) => ({ ...p, siteName: e.target.value }))} placeholder="Nama Situs" className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" />
+                    <input value={systemConfig.siteLogo} onChange={(e) => setSystemConfig((p) => ({ ...p, siteLogo: e.target.value }))} placeholder="Logo Text" className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" />
+                    <input value={systemConfig.timezone} onChange={(e) => setSystemConfig((p) => ({ ...p, timezone: e.target.value }))} placeholder="Timezone" className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" />
+                    <input value={systemConfig.language} onChange={(e) => setSystemConfig((p) => ({ ...p, language: e.target.value }))} placeholder="Bahasa" className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" />
+                  </div>
+                </div>
+
+                <div className="card rounded-2xl p-4">
+                  <h2 className="font-bold text-white mb-3">Integrasi Pihak Ketiga (API Keys)</h2>
+                  <div className="space-y-2 text-sm">
+                    <input value={systemConfig.googleAnalyticsKey} onChange={(e) => setSystemConfig((p) => ({ ...p, googleAnalyticsKey: e.target.value }))} placeholder="Google Analytics Key" className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" />
+                    <input value={systemConfig.smsOtpKey} onChange={(e) => setSystemConfig((p) => ({ ...p, smsOtpKey: e.target.value }))} placeholder="SMS OTP Key" className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" />
+                    <input value={systemConfig.paymentGatewayKey} onChange={(e) => setSystemConfig((p) => ({ ...p, paymentGatewayKey: e.target.value }))} placeholder="Payment Gateway Key" className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" />
+                  </div>
+                </div>
+
+                <div className="card rounded-2xl p-4">
+                  <h2 className="font-bold text-white mb-3">Pengaturan Email (SMTP)</h2>
+                  <div className="space-y-2 text-sm">
+                    <input value={systemConfig.smtpHost} onChange={(e) => setSystemConfig((p) => ({ ...p, smtpHost: e.target.value }))} placeholder="SMTP Host" className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" />
+                    <input value={systemConfig.smtpPort} onChange={(e) => setSystemConfig((p) => ({ ...p, smtpPort: e.target.value }))} placeholder="SMTP Port" className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" />
+                    <input value={systemConfig.smtpUser} onChange={(e) => setSystemConfig((p) => ({ ...p, smtpUser: e.target.value }))} placeholder="SMTP User" className="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" />
+                    <button onClick={saveSystemConfig} className="w-full rounded-lg bg-emerald-600 px-3 py-2 font-semibold">Simpan Konfigurasi</button>
+                  </div>
+                </div>
+              </section>
+            )}
+
+            {tab === "logs" && (
+              <section className="card rounded-2xl p-4 overflow-auto">
+                <h2 className="font-bold text-white mb-3">Audit / Activity Logs</h2>
+                <table className="table w-full">
+                  <thead>
+                    <tr><th>Waktu</th><th>Aktor</th><th>Aksi</th><th>Detail</th><th>IP</th><th>User Agent</th></tr>
+                  </thead>
+                  <tbody>
+                    {auditLogs.map((l, i) => (
+                      <tr key={i}>
+                        <td className="mono text-slate-300">{l.at}</td>
+                        <td className="text-sky-200">{l.actor}</td>
+                        <td className="text-amber-200">{l.action}</td>
+                        <td className="text-slate-300">{l.detail}</td>
+                        <td className="mono text-slate-300">{l.ip}</td>
+                        <td className="text-[11px] text-slate-400">{l.agent}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </section>
+            )}
+
+            {tab === "master" && (
+              <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="card rounded-2xl p-4 space-y-4">
+                  <h2 className="font-bold text-white">Master Data Management</h2>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Kategori</p>
+                    <div className="flex flex-wrap gap-2">{masterData.categories.map((c) => <span key={c} className="text-xs px-2 py-1 rounded bg-slate-900 border border-slate-700">{c}</span>)}</div>
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Provinsi/Kota</p>
+                    <div className="flex flex-wrap gap-2">{masterData.regions.map((c) => <span key={c} className="text-xs px-2 py-1 rounded bg-slate-900 border border-slate-700">{c}</span>)}</div>
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold mb-1">Status Operasional</p>
+                    <div className="flex flex-wrap gap-2">{masterData.operationalStatus.map((c) => <span key={c} className="text-xs px-2 py-1 rounded bg-slate-900 border border-slate-700">{c}</span>)}</div>
+                  </div>
+                  <button onClick={exportMasterData} className="rounded-lg bg-cyan-600 px-3 py-2 font-semibold">Ekspor CSV</button>
+                </div>
+                <div className="card rounded-2xl p-4">
+                  <h2 className="font-bold text-white mb-2">Impor Data Massal</h2>
+                  <p className="text-xs text-slate-400 mb-2">Format per baris: type,value. Contoh: category,Menu Susu</p>
+                  <textarea value={bulkInput} onChange={(e) => setBulkInput(e.target.value)} className="w-full min-h-52 rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 text-sm" placeholder="category,Menu Susu\nregion,Jawa Timur\noperational_status,ValidasiDinkes" />
+                  <button onClick={importMasterData} className="mt-2 rounded-lg bg-indigo-600 px-3 py-2 font-semibold">Impor Master Data</button>
+                </div>
+              </section>
+            )}
+
+            {tab === "security" && (
+              <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="card rounded-2xl p-4 space-y-3">
+                  <h2 className="font-bold text-white">Security & Backups</h2>
+                  <label className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-900/45 px-3 py-2 text-sm">
+                    <span>Auto Backup</span>
+                    <input type="checkbox" checked={backupConfig.autoBackup} onChange={(e) => setBackupConfig((p) => ({ ...p, autoBackup: e.target.checked }))} />
+                  </label>
+                  <label className="block text-sm">Jadwal Backup
+                    <input value={backupConfig.schedule} onChange={(e) => setBackupConfig((p) => ({ ...p, schedule: e.target.value }))} className="mt-1 w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" />
+                  </label>
+                  <p className="text-sm text-slate-300">Backup Terakhir: <span className="mono">{backupConfig.lastBackup}</span></p>
+                  <button onClick={runManualBackup} className="rounded-lg bg-emerald-600 px-3 py-2 font-semibold">Backup Sekarang</button>
+                </div>
+
+                <div className="card rounded-2xl p-4">
+                  <h2 className="font-bold text-white mb-3">Manajemen Sesi Login</h2>
+                  <div className="space-y-2">
+                    {sessions.map((s) => (
+                      <div key={s.id} className="rounded-lg border border-slate-700 bg-slate-900/45 p-3 text-sm">
+                        <p><span className="text-slate-300">User:</span> {s.user}</p>
+                        <p><span className="text-slate-300">Perangkat:</span> {s.device}</p>
+                        <p><span className="text-slate-300">IP:</span> {s.ip} ({s.location})</p>
+                        <p><span className="text-slate-300">Status:</span> <span className={s.active ? "text-emerald-300" : "text-slate-400"}>{s.active ? "Aktif" : "Logout"}</span></p>
+                        {s.active && <button onClick={() => forceLogoutSession(s.id)} className="mt-2 rounded bg-red-600 px-3 py-1.5 text-xs font-semibold">Force Logout</button>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </section>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

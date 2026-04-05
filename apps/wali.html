@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>App Wali Murid</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet" />
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useEffect, useState } = React;
+
+const KEY = "mbg_poc_state_v1";
+const SSO_KEY = "mbg_sso_session";
+
+const defaultState = () => ({ status: "MenungguUpload", items: [], complaints: [], defectReports: [], guruScans: { arrival: false, meal: false }, logs: [], vendorName: "-", weekStart: "-", yoloStatus: "pending", ebastStatus: "none", bospStatus: "menunggu", tteStatus: "pending_tte" });
+const readState = () => {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return defaultState();
+    const parsed = JSON.parse(raw);
+    const base = defaultState();
+    return {
+      ...base,
+      ...parsed,
+      guruScans: { ...base.guruScans, ...(parsed.guruScans || {}) },
+      defectReports: Array.isArray(parsed.defectReports) ? parsed.defectReports : []
+    };
+  } catch {
+    return defaultState();
+  }
+};
+const saveState = (state) => localStorage.setItem(KEY, JSON.stringify({ ...state, updatedAt: new Date().toLocaleString("id-ID") }));
+const readSSO = () => { try { return JSON.parse(localStorage.getItem(SSO_KEY) || "null"); } catch { return null; } };
+
+const detectMedicalTag = (text) => {
+  const t = String(text || "").toLowerCase();
+  if (/muntah|mual/.test(t)) return "muntah";
+  if (/diare|mencret/.test(t)) return "diare";
+  if (/keracunan|basi/.test(t)) return "keracunan";
+  if (/pingsan|lemas/.test(t)) return "pingsan";
+  return null;
+};
+
+function Login({ onLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("walimurid");
+  const disabled = !username.trim() || !password.trim();
+
+  return (
+    <div className="min-h-screen bg-violet-950 flex items-center justify-center p-4" style={{ fontFamily: "Manrope, sans-serif" }}>
+      <div className="w-full max-w-sm rounded-3xl border border-violet-500/30 bg-violet-900/50 p-6 space-y-4 text-violet-100 shadow-2xl">
+        <h1 className="text-2xl font-extrabold text-white">Login Multi-Peran SSO</h1>
+        <input value={username} onChange={(e) => setUsername(e.target.value)} className="w-full rounded-xl bg-violet-950 border border-violet-500/50 px-3 py-2" placeholder="Username" />
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full rounded-xl bg-violet-950 border border-violet-500/50 px-3 py-2" placeholder="Password" />
+        <select value={role} onChange={(e) => setRole(e.target.value)} className="w-full rounded-xl bg-violet-950 border border-violet-500/50 px-3 py-2">
+          <option value="walimurid">Wali Murid</option>
+          <option value="guru">Guru</option>
+          <option value="siswa">Siswa</option>
+        </select>
+        <button disabled={disabled} onClick={() => onLogin({ username: username.trim(), role })} className={`w-full rounded-xl py-2.5 font-bold ${disabled ? "bg-violet-900 text-violet-300" : "bg-violet-500 text-white"}`}>Masuk</button>
+      </div>
+    </div>
+  );
+}
+
+function WaliApp({ session, onLogout }) {
+  const [tab, setTab] = useState("home");
+  const [state, setState] = useState(readState());
+  const [report, setReport] = useState("");
+
+  useEffect(() => {
+    const sync = () => setState(readState());
+    window.addEventListener("storage", sync);
+    const t = setInterval(sync, 2500);
+    return () => { window.removeEventListener("storage", sync); clearInterval(t); };
+  }, []);
+
+  const appendLog = (draft, msg) => [{ id: Date.now(), at: new Date().toLocaleTimeString("id-ID"), message: msg }, ...(draft.logs || [])].slice(0, 80);
+
+  const markAman = () => {
+    if (state.status !== "TibaDiSekolah") {
+      alert("Validasi publik dilakukan setelah status TibaDiSekolah.");
+      return;
+    }
+    const next = { ...state, publicValidation: "aman" };
+    next.logs = appendLog(next, "Wali murid validasi menu: sesuai.");
+    saveState(next);
+    setState(next);
+  };
+
+  const sendComplaint = () => {
+    if (!report.trim()) return;
+    const text = report.trim();
+    const now = Date.now();
+    const criticalWords = /muntah|keracunan|diare|darah|pingsan|krit|bau/i;
+    const severity = criticalWords.test(text) ? "critical" : "normal";
+    const symptomTag = detectMedicalTag(text);
+    const complaint = {
+      id: Date.now(),
+      actor: "walimurid",
+      text,
+      severity,
+      symptomTag,
+      vendorName: state.vendorName || "-",
+      school: "SDN Cikini 01",
+      createdAt: now,
+      at: new Date().toLocaleString("id-ID")
+    };
+    const nextComplaints = [complaint, ...(state.complaints || [])];
+    const next = { ...state, complaints: nextComplaints };
+    next.logs = appendLog(next, `Keluhan dari wali murid (${severity}).`);
+    const windowMs = 6 * 60 * 60 * 1000;
+    const sameMedical = symptomTag
+      ? nextComplaints.filter((c) => c.symptomTag === symptomTag && c.vendorName === complaint.vendorName && (now - Number(c.createdAt || now)) <= windowMs)
+      : [];
+    if (sameMedical.length >= 3) {
+      next.publicValidation = "keluhan_kritis";
+      next.ebastStatus = "ditahan_investigasi";
+      next.bospStatus = "ditahan";
+      next.crossValidation = { active: true, count: sameMedical.length, symptomTag, windowHours: 6 };
+      next.logs = appendLog(next, `Red Alert: terdeteksi ${sameMedical.length} keluhan medis identik (${symptomTag}) dalam 6 jam. E-BAST & BOSP ditahan.`);
+    } else {
+      next.crossValidation = { active: false, count: sameMedical.length, symptomTag, windowHours: 6 };
+    }
+    saveState(next);
+    setState(next);
+    setReport("");
+    setTab("history");
+  };
+
+  return (
+    <div className="min-h-screen bg-violet-950 flex items-center justify-center p-3" style={{ fontFamily: "Manrope, sans-serif" }}>
+      <div className="w-[390px] max-w-full h-[92vh] bg-violet-50 rounded-[28px] border-4 border-violet-900 shadow-2xl overflow-hidden flex flex-col relative">
+        <header className="bg-violet-700 text-white px-4 py-3">
+          <p className="text-xs text-violet-200">App Pengguna - Wali Murid</p>
+          <h1 className="text-lg font-extrabold">Pantauan MBG</h1>
+        </header>
+
+        <main className="flex-1 overflow-y-auto p-3 pb-24 space-y-3">
+          {tab === "home" && (
+            <>
+              <div className="rounded-2xl bg-white border border-violet-100 p-3 text-sm">
+                <p className="font-semibold text-slate-700">Status Alur: {state.status}</p>
+                <p className="text-slate-600">Vendor: {state.vendorName}</p>
+                <p className="text-xs text-slate-500">Minggu mulai: {state.weekStart}</p>
+                <p className="text-xs text-slate-500">E-BAST: {state.ebastStatus} | BOSP: {state.bospStatus}</p>
+              </div>
+              {state.items?.map((item) => (
+                <article key={item.day} className="rounded-2xl bg-white border border-violet-100 p-3">
+                  <p className="font-bold text-slate-800 text-sm">{item.day}</p>
+                  <p className="text-xs text-slate-600">{item.menu}</p>
+                  {item.photoData && <img src={item.photoData} alt={item.day} className="mt-2 w-full h-44 object-cover rounded-xl border border-slate-200" />}
+                </article>
+              ))}
+              {!state.items?.length && <div className="rounded-2xl bg-white border border-violet-100 p-3 text-sm text-slate-500">Belum ada upload menu.</div>}
+            </>
+          )}
+
+          {tab === "report" && (
+            <section className="rounded-2xl bg-white border border-violet-100 p-4 space-y-3">
+              <h2 className="font-bold text-slate-800">Kirim Keluhan / Aspirasi</h2>
+              <button onClick={markAman} className="w-full rounded-xl bg-emerald-600 text-white font-bold px-4 py-2">Menu Sesuai (Validasi Publik)</button>
+              <textarea value={report} onChange={(e) => setReport(e.target.value)} className="w-full rounded-xl border border-slate-300 px-3 py-2 min-h-28" placeholder="Contoh: makanan bau, anak muntah (akan jadi red alert)." />
+              <button onClick={sendComplaint} className="w-full rounded-xl bg-violet-700 text-white font-bold px-4 py-2">Kirim Keluhan</button>
+            </section>
+          )}
+
+          {tab === "history" && (
+            <section className="rounded-2xl bg-white border border-violet-100 p-4 space-y-2">
+              <h2 className="font-bold text-slate-800">Riwayat Keluhan</h2>
+              {(state.complaints || []).map((row) => (
+                <div key={row.id} className="rounded-lg border border-slate-200 px-3 py-2">
+                  <p className="text-sm text-slate-700">{row.text}</p>
+                  <p className="text-xs text-slate-500 mt-1">{row.at} - {row.severity}</p>
+                </div>
+              ))}
+              {!state.complaints?.length && <p className="text-sm text-slate-500">Belum ada keluhan.</p>}
+              <button onClick={onLogout} className="w-full rounded-xl bg-slate-800 text-white font-bold px-4 py-2 mt-2">Logout</button>
+            </section>
+          )}
+        </main>
+
+        <nav className="absolute bottom-3 left-1/2 -translate-x-1/2 w-[350px] max-w-[92%] rounded-2xl bg-white border border-violet-100 shadow-lg px-2 py-2 flex justify-around">
+          {[{id:"home",label:"Home",icon:"🏠"},{id:"report",label:"Keluhan",icon:"✍️"},{id:"history",label:"Riwayat",icon:"📋"}].map((item) => (
+            <button key={item.id} onClick={() => setTab(item.id)} className={`flex flex-col items-center text-[11px] px-2 py-1 rounded-lg ${tab===item.id ? "text-violet-700 bg-violet-50" : "text-slate-500"}`}>
+              <span className="text-base">{item.icon}</span><span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [session, setSession] = useState(() => {
+    const s = readSSO();
+    return s && s.role === "walimurid" ? s : null;
+  });
+
+  const handleLogin = (payload) => {
+    localStorage.setItem(SSO_KEY, JSON.stringify(payload));
+    if (payload.role === "guru") { window.location.href = "guru.html"; return; }
+    if (payload.role === "siswa") { window.location.href = "murid.html"; return; }
+    setSession(payload);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem(SSO_KEY);
+    setSession(null);
+  };
+
+  if (!session) return <Login onLogin={handleLogin} />;
+  return <WaliApp session={session} onLogout={handleLogout} />;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

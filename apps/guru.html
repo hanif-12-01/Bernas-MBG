@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>App Guru</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet" />
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useEffect, useMemo, useState } = React;
+
+const KEY = "mbg_poc_state_v1";
+const SSO_KEY = "mbg_sso_session";
+
+const defaultState = () => ({
+  status: "MenungguUpload",
+  vendorName: "SPPG A - CV Berkah Makmur",
+  weekStart: "",
+  items: [],
+  complaints: [],
+  yoloStatus: "pending",
+  guruScans: { arrival: false, meal: false },
+  defectReports: [],
+  ebastStatus: "none",
+  tteStatus: "pending_tte",
+  bospStatus: "menunggu",
+  logs: [],
+  updatedAt: "-"
+});
+
+const readState = () => {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return defaultState();
+    const parsed = JSON.parse(raw);
+    const base = defaultState();
+    return {
+      ...base,
+      ...parsed,
+      guruScans: { ...base.guruScans, ...(parsed.guruScans || {}) },
+      defectReports: Array.isArray(parsed.defectReports) ? parsed.defectReports : []
+    };
+  } catch {
+    return defaultState();
+  }
+};
+
+const saveState = (state) => localStorage.setItem(KEY, JSON.stringify({ ...state, updatedAt: new Date().toLocaleString("id-ID") }));
+const readSSO = () => {
+  try { return JSON.parse(localStorage.getItem(SSO_KEY) || "null"); } catch { return null; }
+};
+
+function Login({ onLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("guru");
+  const disabled = !username.trim() || !password.trim();
+
+  return (
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4" style={{ fontFamily: "Manrope, sans-serif" }}>
+      <div className="w-full max-w-sm rounded-3xl border border-slate-700 bg-slate-900 p-6 space-y-4 text-slate-100 shadow-2xl">
+        <h1 className="text-2xl font-extrabold">Login Multi-Peran SSO</h1>
+        <p className="text-sm text-slate-400">Alur diagram: siswa / wali / guru pakai satu login.</p>
+        <input value={username} onChange={(e) => setUsername(e.target.value)} className="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2" placeholder="Username" />
+        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2" placeholder="Password" />
+        <select value={role} onChange={(e) => setRole(e.target.value)} className="w-full rounded-xl bg-slate-950 border border-slate-700 px-3 py-2">
+          <option value="guru">Guru</option>
+          <option value="walimurid">Wali Murid</option>
+          <option value="siswa">Siswa</option>
+        </select>
+        <button disabled={disabled} onClick={() => onLogin({ username: username.trim(), role })} className={`w-full rounded-xl py-2.5 font-bold ${disabled ? "bg-slate-700 text-slate-400" : "bg-emerald-600 text-white hover:bg-emerald-500"}`}>Masuk</button>
+      </div>
+    </div>
+  );
+}
+
+function GuruApp({ session, onLogout }) {
+  const [nav, setNav] = useState("home");
+  const [state, setState] = useState(readState());
+  const [scanState, setScanState] = useState("idle");
+  const [scanMsg, setScanMsg] = useState("");
+  const [defectText, setDefectText] = useState("");
+
+  useEffect(() => {
+    const sync = () => setState(readState());
+    window.addEventListener("storage", sync);
+    const t = setInterval(sync, 2500);
+    return () => { window.removeEventListener("storage", sync); clearInterval(t); };
+  }, []);
+
+  const todayMenu = useMemo(() => {
+    if (!state.items?.length) return null;
+    const idx = Math.min((new Date().getDay() || 7) - 1, state.items.length - 1);
+    return state.items[idx];
+  }, [state.items]);
+
+  const addLog = (msg, draft) => [{ id: Date.now(), at: new Date().toLocaleTimeString("id-ID"), message: msg }, ...(draft.logs || [])].slice(0, 80);
+
+  const doMandatoryScan = (scanType) => {
+    if (state.status !== "TibaDiSekolah") {
+      alert("Scanning harian wajib dilakukan setelah makanan TibaDiSekolah.");
+      return;
+    }
+    if (state.guruScans?.[scanType]) {
+      alert("Jenis scan ini sudah diselesaikan.");
+      return;
+    }
+    setScanState("scanning");
+    setScanMsg("");
+    setTimeout(() => {
+      const valid = Math.random() > 0.25;
+      const nextScans = { ...(state.guruScans || {}), [scanType]: true };
+      const bothDone = nextScans.arrival && nextScans.meal;
+      const next = { ...state, yoloStatus: valid ? "valid" : "tidak_sesuai", hasScannedToday: bothDone, guruScans: nextScans };
+      const label = scanType === "arrival" ? "kedatangan vendor" : "makanan aktual";
+      next.logs = addLog(valid ? `Guru menyelesaikan scan ${label}: valid.` : `Guru menyelesaikan scan ${label}: terdeteksi ketidaksesuaian.`, next);
+      if (!valid) {
+        next.ebastStatus = "ditahan_investigasi";
+        next.bospStatus = "ditahan";
+      }
+      saveState(next);
+      setState(next);
+      setScanState("done");
+      setScanMsg(valid ? `Scan ${label} selesai: menu sesuai (YOLO valid).` : `Scan ${label} selesai: menu tidak sesuai, eskalasi ke investigasi.`);
+    }, 2200);
+  };
+
+  const submitDefect = () => {
+    if (!defectText.trim()) return;
+    const reports = state.defectReports || [];
+    if (reports.length >= 2) {
+      alert("Laporan kecacatan maksimal 2 per hari.");
+      return;
+    }
+    const criticalWords = /muntah|keracunan|diare|darah|pingsan|krit|bau/i;
+    const severity = criticalWords.test(defectText) ? "critical" : "normal";
+    const report = {
+      id: Date.now(),
+      text: defectText.trim(),
+      severity,
+      at: new Date().toLocaleString("id-ID")
+    };
+    const next = { ...state, defectReports: [report, ...reports] };
+    next.logs = addLog(severity === "critical" ? "Guru lapor kecacatan kritis." : "Guru lapor kecacatan makanan.", next);
+    if (severity === "critical") {
+      next.ebastStatus = "ditahan_investigasi";
+      next.bospStatus = "ditahan";
+    }
+    saveState(next);
+    setState(next);
+    setDefectText("");
+  };
+
+  const terbitkanEbast = () => {
+    if (state.status !== "TibaDiSekolah") {
+      alert("E-BAST hanya bisa terbit setelah makanan tiba di sekolah.");
+      return;
+    }
+    if (!(state.guruScans?.arrival && state.guruScans?.meal)) {
+      alert("Guru wajib menyelesaikan 2 scanning wajib (kedatangan vendor dan makanan aktual) sebelum menerbitkan E-BAST.");
+      return;
+    }
+    if (state.complaints?.some((c) => c.severity === "critical")) {
+      alert("Ada keluhan kritis. E-BAST ditahan untuk investigasi Pemda.");
+      return;
+    }
+    if (state.yoloStatus === "tidak_sesuai") {
+      alert("Hasil scanning harian tidak sesuai. E-BAST ditahan.");
+      return;
+    }
+    const next = { ...state, ebastStatus: "terbit", tteStatus: "signed_bssn", bospStatus: "cair" };
+    next.logs = addLog("Guru menerbitkan E-BAST otomatis. Dana BOSP dapat dicairkan.", next);
+    saveState(next);
+    setState(next);
+    alert("E-BAST terbit.");
+  };
+
+  const renderHome = () => (
+    <div className="space-y-3">
+      <div className="rounded-2xl bg-white p-3 border border-slate-200">
+        <p className="text-xs text-slate-500">Pantau Dashboard Menu Harian</p>
+        <p className="text-sm font-semibold text-slate-700">Vendor: {state.vendorName || "-"}</p>
+        <p className="text-xs text-slate-500">Status alur: {state.status}</p>
+      </div>
+      {state.items?.map((item) => (
+        <article key={item.day} className="rounded-2xl bg-white p-3 border border-slate-200">
+          <p className="text-sm font-bold text-slate-800">{item.day}</p>
+          <p className="text-xs text-slate-600">{item.menu}</p>
+          {item.photoData && <img src={item.photoData} alt={item.day} className="mt-2 h-40 w-full object-cover rounded-xl border border-slate-200" />}
+        </article>
+      ))}
+      {!state.items?.length && <div className="rounded-2xl bg-white p-3 border border-slate-200 text-sm text-slate-500">Belum ada upload menu dari vendor.</div>}
+    </div>
+  );
+
+  const renderScan = () => (
+    <div className="space-y-3">
+      <div className="rounded-2xl bg-white p-3 border border-slate-200">
+        <h3 className="font-bold text-slate-800">2 Scan Wajib + 2 Laporan Cacat</h3>
+        <p className="text-sm text-rose-600 mt-1 font-semibold">Wajib scan 1x saat vendor datang dan 1x saat makanan aktual. Sisa 2 aksi untuk laporan kecacatan.</p>
+      </div>
+      <div className="rounded-2xl bg-black p-2 border border-slate-300">
+        <div className="relative rounded-xl overflow-hidden h-64 bg-slate-900">
+          {todayMenu?.photoData ? <img src={todayMenu.photoData} alt="Target scan" className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center text-slate-400 text-sm">Belum ada foto menu</div>}
+          <div className="absolute inset-0 m-5 border-2 border-emerald-400/70 rounded-xl"></div>
+          {scanState === "scanning" && <div className="absolute left-5 right-5 h-1 bg-emerald-300 animate-pulse" style={{ top: "50%" }}></div>}
+          <div className="absolute top-2 left-2 rounded bg-black/60 text-[11px] text-emerald-300 px-2 py-1">YOLOv8 Offline</div>
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-2">
+        <button onClick={() => doMandatoryScan("arrival")} disabled={scanState === "scanning" || state.status !== "TibaDiSekolah" || state.guruScans?.arrival} className={`w-full rounded-xl py-2 font-bold ${state.status === "TibaDiSekolah" && scanState !== "scanning" && !state.guruScans?.arrival ? "bg-emerald-600 text-white" : "bg-slate-300 text-slate-500"}`}>
+          {scanState === "scanning" ? "Memindai..." : (state.guruScans?.arrival ? "Scan Kedatangan Vendor Selesai ✅" : "Scan 1: Kedatangan Vendor")}
+        </button>
+        <button onClick={() => doMandatoryScan("meal")} disabled={scanState === "scanning" || state.status !== "TibaDiSekolah" || state.guruScans?.meal} className={`w-full rounded-xl py-2 font-bold ${state.status === "TibaDiSekolah" && scanState !== "scanning" && !state.guruScans?.meal ? "bg-blue-700 text-white" : "bg-slate-300 text-slate-500"}`}>
+          {scanState === "scanning" ? "Memindai..." : (state.guruScans?.meal ? "Scan Makanan Aktual Selesai ✅" : "Scan 2: Makanan Aktual")}
+        </button>
+      </div>
+      {scanMsg && <p className="text-sm font-semibold text-emerald-700">{scanMsg}</p>}
+      <div className="rounded-2xl bg-white p-3 border border-slate-200 text-sm">
+        <p>Scan Vendor Datang: <span className={`font-bold ${state.guruScans?.arrival ? "text-emerald-600" : "text-rose-600"}`}>{state.guruScans?.arrival ? "SUDAH" : "BELUM"}</span></p>
+        <p>Scan Makanan Aktual: <span className={`font-bold ${state.guruScans?.meal ? "text-emerald-600" : "text-rose-600"}`}>{state.guruScans?.meal ? "SUDAH" : "BELUM"}</span></p>
+        <p>YOLO AI: <span className="font-bold uppercase">{state.yoloStatus}</span></p>
+        <p>E-BAST: <span className="font-bold uppercase">{state.ebastStatus}</span></p>
+        <p>TTE BSSN: <span className="font-bold uppercase">{state.tteStatus || "pending_tte"}</span></p>
+      </div>
+      <div className="rounded-2xl bg-white p-3 border border-slate-200 space-y-2">
+        <p className="text-sm font-semibold text-slate-800">Laporan Kecacatan (Maks 2)</p>
+        <textarea value={defectText} onChange={(e) => setDefectText(e.target.value)} className="w-full rounded-xl border border-slate-300 px-3 py-2 min-h-20" placeholder="Contoh: porsi terlalu sedikit / lauk tidak matang" />
+        <button onClick={submitDefect} disabled={(state.defectReports || []).length >= 2} className={`w-full rounded-xl py-2 font-bold ${(state.defectReports || []).length >= 2 ? "bg-slate-300 text-slate-500" : "bg-amber-600 text-white"}`}>
+          {(state.defectReports || []).length >= 2 ? "Batas laporan tercapai" : `Kirim Laporan Cacat (${(state.defectReports || []).length}/2)`}
+        </button>
+        {(state.defectReports || []).map((row) => (
+          <div key={row.id} className="rounded-lg border border-slate-200 px-3 py-2 bg-slate-50">
+            <p className="text-sm text-slate-700">{row.text}</p>
+            <p className="text-xs text-slate-500 mt-1">{row.at} - {row.severity}</p>
+          </div>
+        ))}
+      </div>
+      <button onClick={terbitkanEbast} disabled={!(state.guruScans?.arrival && state.guruScans?.meal)} className={`w-full rounded-xl py-2 font-bold ${(state.guruScans?.arrival && state.guruScans?.meal) ? "bg-blue-700 text-white" : "bg-slate-400 text-slate-200 cursor-not-allowed"}`}>
+        Terbitkan E-BAST
+      </button>
+    </div>
+  );
+
+  const renderProfile = () => (
+    <div className="rounded-2xl bg-white p-3 border border-slate-200 space-y-2 text-sm">
+      <p>Username: <span className="font-semibold">{session.username}</span></p>
+      <p>Role: <span className="font-semibold uppercase">{session.role}</span></p>
+      <button onClick={onLogout} className="w-full rounded-xl py-2 bg-slate-800 text-white font-bold">Logout</button>
+    </div>
+  );
+
+  const renderNews = () => (
+    <div className="space-y-2">
+      {(state.logs || []).map((log) => (
+        <div key={log.id} className="rounded-2xl bg-white p-3 border border-slate-200">
+          <p className="text-sm text-slate-700">{log.message}</p>
+          <p className="text-xs text-slate-500 mt-1">{log.at}</p>
+        </div>
+      ))}
+      {!state.logs?.length && <div className="rounded-2xl bg-white p-3 border border-slate-200 text-sm text-slate-500">Belum ada aktivitas.</div>}
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-[#0f172a] flex items-center justify-center p-3" style={{ fontFamily: "Manrope, sans-serif" }}>
+      <div className="w-[390px] max-w-full h-[92vh] bg-slate-100 rounded-[28px] border-4 border-slate-800 shadow-2xl overflow-hidden flex flex-col relative">
+        <div className="bg-emerald-700 text-white px-4 pt-3 pb-2">
+          <div className="flex justify-between items-center">
+            <p className="text-[11px]">App Pengguna - Guru</p>
+            <p className="text-[11px]">{new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}</p>
+          </div>
+          <h1 className="text-lg font-extrabold">Dashboard Guru</h1>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-3 pb-24">
+          {nav === "home" && renderHome()}
+          {nav === "scan" && renderScan()}
+          {nav === "profile" && renderProfile()}
+          {nav === "news" && renderNews()}
+        </div>
+
+        <nav className="absolute bottom-3 left-1/2 -translate-x-1/2 w-[350px] max-w-[92%] rounded-2xl bg-white border border-slate-200 shadow-lg px-2 py-2 flex justify-around">
+          {[{id:"home",label:"Home",icon:"🏠"},{id:"scan",label:"Scan",icon:"📷"},{id:"profile",label:"Data",icon:"👤"},{id:"news",label:"Log",icon:"📰"}].map((item) => (
+            <button key={item.id} onClick={() => setNav(item.id)} className={`flex flex-col items-center text-[11px] px-2 py-1 rounded-lg ${nav===item.id ? "text-emerald-700 bg-emerald-50" : "text-slate-500"}`}>
+              <span className="text-base">{item.icon}</span>
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [session, setSession] = useState(() => {
+    const s = readSSO();
+    return s && s.role === "guru" ? s : null;
+  });
+
+  const handleLogin = (payload) => {
+    localStorage.setItem(SSO_KEY, JSON.stringify(payload));
+    if (payload.role === "walimurid") {
+      window.location.href = "wali.html";
+      return;
+    }
+    if (payload.role === "siswa") {
+      window.location.href = "murid.html";
+      return;
+    }
+    setSession(payload);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem(SSO_KEY);
+    setSession(null);
+  };
+
+  if (!session) return <Login onLogin={handleLogin} />;
+  return <GuruApp session={session} onLogout={handleLogout} />;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

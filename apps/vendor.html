@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vendor SPPG</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet" />
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useMemo, useState } = React;
+
+const KEY = "mbg_poc_state_v1";
+const DAYS = ["Senin","Selasa","Rabu","Kamis","Jumat","Sabtu","Minggu"];
+
+const defaultState = () => ({
+  status: "MenungguUpload",
+  vendorName: "SPPG A - CV Berkah Makmur",
+  weekStart: "",
+  items: DAYS.map((day) => ({ day, menu: "", photoData: "" })),
+  complaints: [],
+  yoloStatus: "pending",
+  guruScans: { arrival: false, meal: false },
+  defectReports: [],
+  ebastStatus: "none",
+  tteStatus: "pending_tte",
+  bospStatus: "menunggu",
+  logs: [],
+  updatedAt: new Date().toLocaleString("id-ID")
+});
+
+const readState = () => {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return defaultState();
+    const parsed = JSON.parse(raw);
+    const base = defaultState();
+    return {
+      ...base,
+      ...parsed,
+      guruScans: { ...base.guruScans, ...(parsed.guruScans || {}) },
+      defectReports: Array.isArray(parsed.defectReports) ? parsed.defectReports : []
+    };
+  } catch {
+    return defaultState();
+  }
+};
+
+const saveState = (state) => localStorage.setItem(KEY, JSON.stringify({ ...state, updatedAt: new Date().toLocaleString("id-ID") }));
+
+function App() {
+  const persisted = readState();
+  const [vendorName, setVendorName] = useState((persisted.vendorName && persisted.vendorName !== "-") ? persisted.vendorName : "SPPG A - CV Berkah Makmur");
+  const [weekStart, setWeekStart] = useState(persisted.weekStart || "");
+  // Pastikan array berjumlah 7 hari
+  const [items, setItems] = useState(persisted.items?.length === 7 ? persisted.items : DAYS.map((day) => ({ day, menu: "", photoData: "" })));
+  const [state, setState] = useState(persisted);
+  const [sending, setSending] = useState(false);
+
+  const completion = useMemo(() => items.filter((item) => (item.menu || "").trim() && item.photoData).length, [items]);
+  const canUpload7Days = completion === 7 && (vendorName || "").trim() && weekStart;
+
+  const setMenu = (index, value) => setItems((prev) => prev.map((item, i) => i === index ? { ...item, menu: value } : item));
+  const setPhoto = (index, file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setItems((prev) => prev.map((item, i) => i === index ? { ...item, photoData: String(reader.result || "") } : item));
+    reader.readAsDataURL(file);
+  };
+
+  const pushLog = (draft, message) => [{ id: Date.now(), at: new Date().toLocaleTimeString("id-ID"), message }, ...(draft.logs || [])].slice(0, 80);
+
+  const handleUpload = () => {
+    if (!canUpload7Days) {
+      alert("Lengkapi input 7 hari menu dan foto.");
+      return;
+    }
+    setSending(true);
+    setTimeout(() => {
+      const next = {
+        ...state,
+        status: "FotoDiunggahSPPG",
+        vendorName: vendorName.trim(),
+        weekStart,
+        items,
+        complaints: [],
+        yoloStatus: "pending",
+        ebastStatus: "none",
+        tteStatus: "pending_tte",
+        bospStatus: "menunggu"
+      };
+      next.logs = pushLog(next, "Vendor upload foto menu prapengiriman 7 hari.");
+      saveState(next);
+      setState(next);
+      setSending(false);
+      alert("Upload foto menu berhasil.");
+    }, 800);
+  };
+
+  const updateStatus = (nextStatus, note) => {
+    const next = { ...state, status: nextStatus };
+    next.logs = pushLog(next, note);
+    saveState(next);
+    setState(next);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-900 p-6" style={{ fontFamily: "Manrope, sans-serif" }}>
+      <div className="max-w-[1320px] mx-auto">
+        <div className="text-slate-100 mb-4">
+          <p className="text-xs tracking-widest text-slate-400">VENDOR SPPG - LAPTOP DASHBOARD</p>
+          <h1 className="text-2xl font-extrabold">Flow: Upload -> Dalam Pengiriman -> Tiba Di Sekolah</h1>
+        </div>
+
+        <div className="rounded-[28px] border border-slate-700 bg-slate-950 p-3 shadow-2xl">
+          <div className="rounded-[20px] border border-slate-700 bg-slate-100 min-h-[78vh] overflow-hidden">
+            <div className="bg-slate-800 text-white px-5 py-3 flex items-center justify-between">
+              <p className="font-semibold">Vendor Control Panel</p>
+              <p className="text-xs">Status Sistem: {state.status}</p>
+            </div>
+
+            <div className="p-5 grid grid-cols-1 xl:grid-cols-3 gap-4">
+              <section className="xl:col-span-2 rounded-2xl bg-white border border-slate-200 p-4 space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <input value={vendorName} onChange={(e) => setVendorName(e.target.value)} className="rounded-xl border border-slate-300 px-3 py-2" placeholder="Nama Vendor" />
+                  <input type="date" value={weekStart} onChange={(e) => setWeekStart(e.target.value)} className="rounded-xl border border-slate-300 px-3 py-2" />
+                </div>
+
+                <div className="rounded-xl border border-slate-200 p-3 bg-slate-50">
+                  <p className="text-sm font-semibold text-slate-700">Progress Input 7 Hari: {completion}/7</p>
+                  <div className="mt-2 h-2 rounded-full bg-slate-200 overflow-hidden">
+                    <div className="h-2 bg-blue-600" style={{ width: `${(completion / 7) * 100}%` }}></div>
+                  </div>
+                </div>
+
+                <div className="space-y-3 max-h-[52vh] overflow-auto pr-1">
+                  {items.map((item, idx) => (
+                    <div key={item.day} className="rounded-2xl border border-slate-200 p-3">
+                      <p className="font-bold text-slate-800">{item.day}</p>
+                      <input value={item.menu} onChange={(e) => setMenu(idx, e.target.value)} className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2" placeholder={`Menu ${item.day}`} />
+                      <input type="file" accept="image/*" className="mt-2 w-full rounded-xl border border-slate-300 px-3 py-2" onChange={(e) => setPhoto(idx, e.target.files?.[0])} />
+                      {item.photoData && <img src={item.photoData} alt={item.day} className="mt-2 h-44 w-full object-cover rounded-xl border border-slate-200" />}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                  <button onClick={handleUpload} disabled={!canUpload7Days || sending} className={`rounded-xl py-2 font-bold ${(!canUpload7Days || sending) ? "bg-slate-300 text-slate-500" : "bg-blue-700 text-white"}`}>
+                    {sending ? "Mengunggah..." : "Upload Foto Menu Prapengiriman"}
+                  </button>
+                  <button onClick={() => updateStatus("DalamPengiriman", "Vendor mengirim makanan ke sekolah (kurir jalan)." )} disabled={state.status !== "FotoDiunggahSPPG"} className={`rounded-xl py-2 font-bold ${state.status === "FotoDiunggahSPPG" ? "bg-amber-600 text-white" : "bg-slate-300 text-slate-500"}`}>
+                    Kirim Makanan ke Sekolah
+                  </button>
+                  <button onClick={() => updateStatus("TibaDiSekolah", "Makanan tiba di sekolah pukul 11 siang (simulasi)." )} disabled={state.status !== "DalamPengiriman"} className={`rounded-xl py-2 font-bold ${state.status === "DalamPengiriman" ? "bg-emerald-600 text-white" : "bg-slate-300 text-slate-500"}`}>
+                    Konfirmasi Tiba di Sekolah
+                  </button>
+                </div>
+              </section>
+
+              <aside className="rounded-2xl bg-white border border-slate-200 p-4 space-y-3">
+                <h2 className="font-bold text-slate-800">Status Alur POC</h2>
+                <div className="space-y-2 text-sm">
+                  {[
+                    ["MenungguUpload", "Menunggu upload menu"],
+                    ["FotoDiunggahSPPG", "Foto diunggah SPPG"],
+                    ["DalamPengiriman", "Dalam pengiriman"],
+                    ["TibaDiSekolah", "Tiba di sekolah"]
+                  ].map(([id, label]) => (
+                    <div key={id} className={`rounded-lg border px-3 py-2 ${state.status === id ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-500"}`}>{label}</div>
+                  ))}
+                </div>
+                <div className="rounded-xl border border-slate-200 p-3 bg-slate-50 text-sm">
+                  <p>E-BAST: <span className="font-semibold uppercase">{state.ebastStatus}</span></p>
+                  <p>TTE BSSN: <span className="font-semibold uppercase">{state.tteStatus || "pending_tte"}</span></p>
+                  <p>BOSP: <span className="font-semibold uppercase">{state.bospStatus}</span></p>
+                </div>
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold text-slate-700">Log Aktivitas</p>
+                  <div className="max-h-56 overflow-auto space-y-2">
+                    {(state.logs || []).map((log) => (
+                      <div key={log.id} className="rounded-lg border border-slate-200 px-2 py-2">
+                        <p className="text-xs text-slate-700">{log.message}</p>
+                        <p className="text-[11px] text-slate-500 mt-1">{log.at}</p>
+                      </div>
+                    ))}
+                    {!state.logs?.length && <p className="text-xs text-slate-500">Belum ada log.</p>}
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+        <div className="h-3 w-3/4 mx-auto rounded-b-full bg-slate-700/60 mt-2"></div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>

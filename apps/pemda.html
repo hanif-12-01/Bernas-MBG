@@ -1,0 +1,764 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Command Center Pemda</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+</head>
+<body class="bg-slate-100">
+<div id="root"></div>
+<script type="text/babel">
+const { useEffect, useMemo, useRef, useState } = React;
+
+const KEY = "mbg_poc_state_v1";
+const defaultState = () => ({ status: "MenungguUpload", vendorName: "-", weekStart: "-", items: [], complaints: [], yoloStatus: "pending", ebastStatus: "none", bospStatus: "menunggu", logs: [], updatedAt: "-" });
+const readState = () => { try { const raw = localStorage.getItem(KEY); return raw ? JSON.parse(raw) : defaultState(); } catch { return defaultState(); } };
+const saveState = (state) => localStorage.setItem(KEY, JSON.stringify({ ...state, updatedAt: new Date().toLocaleString("id-ID") }));
+
+const VENDOR_SEED = [
+  { id: "JKT-A", name: "SPPG Jakarta Pusat", school: "SDN Cikini 01", routeDistanceKm: 8.5, baseRisk: 28, trafficIndex: 72, originLat: -6.1754, originLng: 106.8272, destLat: -6.1967, destLng: 106.8414 },
+  { id: "JKT-B", name: "SPPG Jakarta Barat", school: "SDN Tomang 11", routeDistanceKm: 10.2, baseRisk: 26, trafficIndex: 78, originLat: -6.1684, originLng: 106.7812, destLat: -6.1775, destLng: 106.7905 },
+  { id: "JKT-C", name: "SPPG Jakarta Selatan", school: "SDN Tebet Timur 12", routeDistanceKm: 9.4, baseRisk: 24, trafficIndex: 75, originLat: -6.2391, originLng: 106.8132, destLat: -6.2295, destLng: 106.8534 },
+  { id: "JKT-D", name: "SPPG Jakarta Timur", school: "SDN Rawamangun 09", routeDistanceKm: 12.1, baseRisk: 30, trafficIndex: 74, originLat: -6.2253, originLng: 106.9051, destLat: -6.2021, destLng: 106.8848 },
+  { id: "JKT-E", name: "SPPG Jakarta Utara", school: "SDN Sunter Jaya 05", routeDistanceKm: 13.6, baseRisk: 32, trafficIndex: 80, originLat: -6.1214, originLng: 106.8858, destLat: -6.1462, destLng: 106.8756 }
+];
+
+const DAY_ID = ["Minggu","Senin","Selasa","Rabu","Kamis","Jumat","Sabtu"];
+
+const scoreToLevel = (score) => {
+  if (score >= 80) return { label: "Hambatan Tinggi", cls: "text-red-300" };
+  if (score >= 65) return { label: "Potensi Terlambat", cls: "text-amber-300" };
+  return { label: "Aman", cls: "text-emerald-300" };
+};
+
+const scoreToEtaDelay = (score) => {
+  if (score >= 85) return 45;
+  if (score >= 75) return 30;
+  if (score >= 65) return 18;
+  if (score >= 55) return 10;
+  return 0;
+};
+
+const toProgressStage = (delayMinutes) => {
+  if (delayMinutes >= 30) return { stage: "Proses Pembuatan", progress: 40 };
+  if (delayMinutes >= 10) return { stage: "Dalam Perjalanan", progress: 75 };
+  return { stage: "Tiba di Sekolah", progress: 100 };
+};
+
+const interpolatePoint = (start, end, t) => (start + ((end - start) * t));
+
+const detectMedicalTag = (text) => {
+  const t = String(text || "").toLowerCase();
+  if (/muntah|mual/.test(t)) return "muntah";
+  if (/diare|mencret/.test(t)) return "diare";
+  if (/keracunan|basi/.test(t)) return "keracunan";
+  if (/pingsan|lemas/.test(t)) return "pingsan";
+  return null;
+};
+
+const stageIcon = (stage) => {
+  if (stage === "Dalam Perjalanan") return "🚚";
+  if (stage === "Tiba di Sekolah") return "✅";
+  return "🍱";
+};
+
+function App() {
+  const [state, setState] = useState(readState());
+  const [nav, setNav] = useState("monitor");
+  const [predicting, setPredicting] = useState(false);
+  const [predError, setPredError] = useState("");
+  const [predictions, setPredictions] = useState([]);
+  const [selectedTracker, setSelectedTracker] = useState("JKT-A");
+  const [lastPredictAt, setLastPredictAt] = useState("-");
+  const [simRunning, setSimRunning] = useState(false);
+  const [reportGenerating, setReportGenerating] = useState(false);
+  const [autoReport, setAutoReport] = useState(null);
+  const [canvasReady, setCanvasReady] = useState(false);
+  const [simResult, setSimResult] = useState({
+    // Pilar 1: Food Safety
+    sampleComplaint: "Anak saya muntah setelah makan ayam dari sekolah",
+    reportsIn6Hours: 2,
+    sameSchoolVendor: "SDN Cikini 01 - SPPG Jakarta Pusat",
+    threshold: 3,
+    redAlertActive: false,
+    distributionStopped: false,
+    // Pilar 2: Cyber Security
+    ssoEncrypted: true,
+    rlsEnabled: true,
+    dataAggregatedView: "1 Insiden di SDN 01",
+    antiSpoofing: true,
+    depthEstimation: true,
+    tteBssn: true,
+    updatedAt: "-"
+  });
+  const reportCanvasRef = useRef(null);
+
+  useEffect(() => {
+    const sync = () => setState(readState());
+    window.addEventListener("storage", sync);
+    const t = setInterval(sync, 2500);
+    return () => { window.removeEventListener("storage", sync); clearInterval(t); };
+  }, []);
+
+  const crossValidation = useMemo(() => {
+    const now = Date.now();
+    const complaints = (state.complaints || []).map((c) => ({
+      ...c,
+      symptomTag: c.symptomTag || detectMedicalTag(c.text),
+      vendorName: c.vendorName || state.vendorName || "-",
+      createdAt: Number(c.createdAt || now)
+    }));
+    const windowMs = 6 * 60 * 60 * 1000;
+    const grouped = {};
+    complaints.forEach((c) => {
+      if (!c.symptomTag) return;
+      if ((now - c.createdAt) > windowMs) return;
+      const key = `${c.vendorName}__${c.symptomTag}`;
+      grouped[key] = (grouped[key] || 0) + 1;
+    });
+    let bestKey = null;
+    let bestCount = 0;
+    Object.keys(grouped).forEach((k) => {
+      if (grouped[k] > bestCount) {
+        bestKey = k;
+        bestCount = grouped[k];
+      }
+    });
+    const active = bestCount >= 3;
+    const [vendorName = "-", symptomTag = "-"] = (bestKey || "__").split("__");
+    return { active, count: bestCount, vendorName, symptomTag };
+  }, [state.complaints, state.vendorName]);
+
+  const redAlert = useMemo(() => crossValidation.active || state.yoloStatus === "tidak_sesuai", [crossValidation.active, state.yoloStatus]);
+  const riskyVendors = useMemo(() => predictions.filter((v) => v.todayScore >= 65).length, [predictions]);
+
+  const generateAutoReport = () => {
+    setReportGenerating(true);
+    setCanvasReady(false);
+    setTimeout(() => {
+      const today = new Date();
+      const criticalComplaints = (state.complaints || []).filter((c) => c.severity === "critical");
+      const normalComplaints = (state.complaints || []).filter((c) => c.severity !== "critical");
+      const totalComplaints = (state.complaints || []).length;
+      const totalDefects = (state.defectReports || []).length;
+      const foodWasteIndex = Math.max(8, Math.min(42, 26 + (riskyVendors * 2) - Math.floor(Math.random() * 8)));
+      const avgRisk = predictions.length ? Math.round(predictions.reduce((a, b) => a + b.todayScore, 0) / predictions.length) : 0;
+      const compliance = Math.max(78, Math.min(99, 92 - Math.round(avgRisk / 10) + Math.floor(Math.random() * 6)));
+      const absorption = Math.max(72, Math.min(98, 88 + Math.floor(Math.random() * 9) - riskyVendors));
+      const wasteSavings = Math.max(4, Math.min(24, 14 + Math.floor(Math.random() * 8) - Math.floor(foodWasteIndex / 10)));
+
+      const vendorReport = predictions.map((v) => {
+        const punctuality = Math.max(45, 100 - v.delayMinutes - Math.floor(v.todayScore / 8));
+        const menuQuality = Math.max(55, 100 - Math.floor(v.todayScore / 6) - (totalDefects * 3));
+        const score = Math.round((punctuality * 0.55) + (menuQuality * 0.45));
+        const incidents = [];
+        if (v.todayScore >= 80) incidents.push("Potensi hambatan distribusi tinggi");
+        if (criticalComplaints.length) incidents.push("Terpantau keluhan medis kritis di wilayah layanan");
+        if (!incidents.length) incidents.push("Tidak ada insiden mayor terdeteksi");
+        const forceMajeure = v.forceMajeureNote;
+        return {
+          ...v,
+          punctuality,
+          menuQuality,
+          score,
+          incidents,
+          forceMajeure
+        };
+      });
+
+      const advisor = [];
+      const topRisk = vendorReport[0];
+      if (topRisk && topRisk.todayScore >= 65) {
+        advisor.push(`Perlu pendampingan kontrol distribusi untuk ${topRisk.name} karena skor risiko ${topRisk.todayScore} dan ETA ${topRisk.eta}.`);
+      }
+      const bestVendor = [...vendorReport].sort((a, b) => b.score - a.score)[0];
+      if (bestVendor) {
+        advisor.push(`Pertahankan pola menu dan operasional ${bestVendor.name} (skor kinerja ${bestVendor.score}) sebagai benchmark lintas vendor.`);
+      }
+      if (foodWasteIndex > 25) {
+        advisor.push("Optimalkan komposisi menu dengan porsi adaptif per sekolah untuk menekan sisa pangan dan meningkatkan serapan gizi.");
+      } else {
+        advisor.push("Pertahankan menu dengan indeks sisa pangan rendah dan lakukan replikasi ke sekolah dengan tingkat sisa tinggi.");
+      }
+
+      const formalNarrative = `Berdasarkan analisis terintegrasi data distribusi, cuaca, sentimen publik, dan kontrol mutu, capaian layanan MBG hari ini menunjukkan tingkat kepatuhan gizi sebesar ${compliance}% dengan serapan anggaran BOSP ${absorption}%. Secara umum layanan berada pada kategori terkendali, namun diperlukan intervensi operasional terarah pada vendor berisiko tinggi untuk menjaga ketepatan waktu serta kualitas menu aktual. Pemda direkomendasikan melanjutkan skema monitoring berbasis AI dan penguatan kontrol lapangan berbasis bukti digital.`;
+
+      setAutoReport({
+        generatedAt: today.toLocaleString("id-ID"),
+        executive: {
+          bospPerformance: `${absorption}% serapan dana dengan mekanisme kontrol adaptif`,
+          nutritionCompliance: `${compliance}% makanan memenuhi standar AKG Kemenkes`,
+          budgetEfficiency: `Potensi penghematan food waste sekitar ${wasteSavings}% dari baseline operasional`
+        },
+        vendorReport,
+        publicAnalysis: {
+          zeroWasteIndex: `${foodWasteIndex}%`,
+          totalComplaints,
+          criticalComplaints: criticalComplaints.length,
+          keySentiment: [
+            `Sentimen positif/normal: ${normalComplaints.length} laporan`,
+            `Sentimen kritis medis: ${criticalComplaints.length} laporan`,
+            `Laporan kecacatan guru: ${totalDefects} kejadian`
+          ]
+        },
+        advisor,
+        formalNarrative
+      });
+      setReportGenerating(false);
+    }, 1600);
+  };
+
+  const drawWrappedText = (ctx, text, x, y, maxWidth, lineHeight) => {
+    const words = String(text || "").split(" ");
+    let line = "";
+    let cursorY = y;
+    for (let i = 0; i < words.length; i++) {
+      const testLine = line + words[i] + " ";
+      const testWidth = ctx.measureText(testLine).width;
+      if (testWidth > maxWidth && i > 0) {
+        ctx.fillText(line.trim(), x, cursorY);
+        line = words[i] + " ";
+        cursorY += lineHeight;
+      } else {
+        line = testLine;
+      }
+    }
+    if (line.trim()) {
+      ctx.fillText(line.trim(), x, cursorY);
+      cursorY += lineHeight;
+    }
+    return cursorY;
+  };
+
+  const renderReportCanvas = (report) => {
+    const canvas = reportCanvasRef.current;
+    if (!canvas || !report) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    canvas.width = 1240;
+    canvas.height = 1754;
+
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = "#0f172a";
+    ctx.font = "700 34px Arial";
+    ctx.fillText("AUTO-RAPOR MBG (SIMULASI GEMINI)", 56, 72);
+    ctx.font = "500 20px Arial";
+    ctx.fillStyle = "#334155";
+    ctx.fillText(`Waktu Generate: ${report.generatedAt}`, 56, 106);
+
+    let y = 150;
+    const sectionTitle = (title) => {
+      ctx.fillStyle = "#111827";
+      ctx.font = "700 24px Arial";
+      ctx.fillText(title, 56, y);
+      y += 30;
+    };
+
+    const paragraph = (label, value) => {
+      ctx.fillStyle = "#0f172a";
+      ctx.font = "700 18px Arial";
+      y = drawWrappedText(ctx, `${label}:`, 56, y, 1120, 27);
+      ctx.fillStyle = "#334155";
+      ctx.font = "500 18px Arial";
+      y = drawWrappedText(ctx, value, 76, y, 1100, 27);
+      y += 8;
+    };
+
+    sectionTitle("1. Ringkasan Eksekutif Kinerja (Overview)");
+    paragraph("Kinerja BOSP Keseluruhan", report.executive.bospPerformance);
+    paragraph("Tingkat Kepatuhan Gizi", report.executive.nutritionCompliance);
+    paragraph("Efisiensi Anggaran", report.executive.budgetEfficiency);
+
+    y += 6;
+    sectionTitle("2. Penilaian Per-Vendor (Rapor SPPG)");
+    report.vendorReport.forEach((v, idx) => {
+      ctx.fillStyle = "#0f172a";
+      ctx.font = "700 17px Arial";
+      y = drawWrappedText(ctx, `${idx + 1}. ${v.name} | Skor: ${v.score}`, 56, y, 1120, 25);
+      ctx.fillStyle = "#334155";
+      ctx.font = "500 16px Arial";
+      y = drawWrappedText(ctx, `Log Insiden: ${v.incidents.join("; ")}`, 76, y, 1090, 24);
+      y = drawWrappedText(ctx, `Force Majeure: ${v.forceMajeure}`, 76, y, 1090, 24);
+      y += 4;
+    });
+
+    y += 4;
+    sectionTitle("3. Analisis Konsumsi & Aspirasi Publik");
+    paragraph("Indeks Sisa Pangan (Zero-Waste)", report.publicAnalysis.zeroWasteIndex);
+    report.publicAnalysis.keySentiment.forEach((s) => {
+      ctx.fillStyle = "#334155";
+      ctx.font = "500 16px Arial";
+      y = drawWrappedText(ctx, `- ${s}`, 76, y, 1090, 24);
+    });
+
+    y += 6;
+    sectionTitle("4. Rekomendasi Tindakan (AI Advisory)");
+    report.advisor.forEach((a) => {
+      ctx.fillStyle = "#334155";
+      ctx.font = "500 16px Arial";
+      y = drawWrappedText(ctx, `- ${a}`, 76, y, 1090, 24);
+    });
+    paragraph("Narasi Formal", report.formalNarrative);
+
+    setCanvasReady(true);
+  };
+
+  const exportCanvasToPdf = () => {
+    const canvas = reportCanvasRef.current;
+    if (!canvas || !canvasReady) return;
+    if (!window.jspdf || !window.jspdf.jsPDF) {
+      alert("Library PDF belum siap. Coba refresh halaman.");
+      return;
+    }
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const imgData = canvas.toDataURL("image/png", 1.0);
+    const ratio = Math.min(pageWidth / canvas.width, pageHeight / canvas.height);
+    const w = canvas.width * ratio;
+    const h = canvas.height * ratio;
+    const x = (pageWidth - w) / 2;
+    const y = 0;
+    pdf.addImage(imgData, "PNG", x, y, w, h);
+    pdf.save(`Auto-Rapor-MBG-${new Date().toISOString().slice(0,10)}.pdf`);
+  };
+
+  const runSecurityScaleSimulation = () => {
+    setSimRunning(true);
+    setTimeout(() => {
+      const reportsIn6Hours = 1 + Math.floor(Math.random() * 5);
+      const redAlertActive = reportsIn6Hours >= 3;
+      const next = {
+        sampleComplaint: "Anak saya muntah setelah makan ayam dari sekolah",
+        reportsIn6Hours,
+        sameSchoolVendor: "SDN Cikini 01 - SPPG Jakarta Pusat",
+        threshold: 3,
+        redAlertActive,
+        distributionStopped: redAlertActive,
+        ssoEncrypted: true,
+        rlsEnabled: true,
+        dataAggregatedView: `${reportsIn6Hours} Insiden di SDN 01`,
+        antiSpoofing: true,
+        depthEstimation: true,
+        tteBssn: true,
+        updatedAt: new Date().toLocaleString("id-ID")
+      };
+      setSimResult(next);
+      setSimRunning(false);
+    }, 1300);
+  };
+
+  const runTodayPrediction = async () => {
+    setPredicting(true);
+    setPredError("");
+    try {
+      const all = await Promise.all(
+        VENDOR_SEED.map(async (vendor) => {
+          let date = new Date().toISOString().slice(0, 10);
+          const roadPenalty = Math.floor(vendor.trafficIndex / 16);
+          const gpsSpeed = Math.max(8, Math.round(38 - (vendor.trafficIndex / 3.3) - roadPenalty + (Math.random() * 6 - 3)));
+          const prepMinutes = 42 + Math.floor(Math.random() * 22);
+          const travelMinutes = Math.round((vendor.routeDistanceKm / gpsSpeed) * 60);
+          const totalMinutes = prepMinutes + travelMinutes;
+          const delayMinutes = Math.max(0, totalMinutes - 80);
+          const roadCondition = gpsSpeed < 16 ? "Perbaikan Jalan" : gpsSpeed < 22 ? "Padat Merayap" : "Lancar Terkendali";
+          const gpsFactor = Math.max(0, 35 - gpsSpeed) * 1.8;
+          const scoreRaw = vendor.baseRisk + (vendor.trafficIndex * 0.35) + gpsFactor + (delayMinutes * 0.7);
+          const todayScore = Math.max(5, Math.min(99, Math.round(scoreRaw)));
+          const etaBaseHour = 8;
+          const etaBaseMinute = 30;
+          const etaMin = etaBaseMinute + delayMinutes;
+          const etaHour = etaBaseHour + Math.floor(etaMin / 60);
+          const etaMinuteFinal = etaMin % 60;
+          const eta = `${String(etaHour).padStart(2, "0")}:${String(etaMinuteFinal).padStart(2, "0")}`;
+          const stageInfo = toProgressStage(delayMinutes);
+          const forceMajeureNote = roadCondition === "Perbaikan Jalan"
+            ? `Keterlambatan dipengaruhi kendala medan/rute (${roadCondition}) berdasarkan GPS tracker.`
+            : "Tidak ada kendala geografis signifikan berdasarkan GPS tracker.";
+          const routeRatio = stageInfo.stage === "Proses Pembuatan" ? 0.08 : (stageInfo.progress / 100);
+          const currentLat = interpolatePoint(vendor.originLat, vendor.destLat, routeRatio);
+          const currentLng = interpolatePoint(vendor.originLng, vendor.destLng, routeRatio);
+          return {
+            ...vendor,
+            todayDate: date,
+            todayDay: DAY_ID[new Date(date).getDay()],
+            gpsSpeed,
+            roadCondition,
+            todayScore,
+            todayLevel: scoreToLevel(todayScore).label,
+            delayMinutes,
+            eta,
+            stage: stageInfo.stage,
+            progress: stageInfo.progress,
+            forceMajeureNote,
+            currentLat,
+            currentLng,
+            mapEmbedUrl: `https://maps.google.com/maps?q=${currentLat},${currentLng}&z=14&output=embed`,
+            routeEmbedUrl: `https://maps.google.com/maps?saddr=${vendor.originLat},${vendor.originLng}&daddr=${vendor.destLat},${vendor.destLng}&output=embed`
+          };
+        })
+      );
+      setPredictions(all.sort((a, b) => b.todayScore - a.todayScore));
+      setLastPredictAt(new Date().toLocaleString("id-ID"));
+    } catch (err) {
+      setPredError(err?.message || "Gagal menjalankan prediksi hari ini.");
+    } finally {
+      setPredicting(false);
+    }
+  };
+
+  const forceHold = () => {
+    const next = { ...state, ebastStatus: "ditahan_investigasi", bospStatus: "ditahan" };
+    next.logs = [{ id: Date.now(), at: new Date().toLocaleTimeString("id-ID"), message: "Pemda menahan E-BAST dan BOSP karena investigasi." }, ...(next.logs || [])].slice(0, 80);
+    saveState(next);
+    setState(next);
+  };
+
+  const releaseBosp = () => {
+    const next = { ...state, ebastStatus: "terbit", bospStatus: "cair" };
+    next.logs = [{ id: Date.now(), at: new Date().toLocaleTimeString("id-ID"), message: "Pemda menyetujui pencairan BOSP setelah verifikasi." }, ...(next.logs || [])].slice(0, 80);
+    saveState(next);
+    setState(next);
+  };
+
+  useEffect(() => {
+    runTodayPrediction();
+  }, []);
+
+  useEffect(() => {
+    if (!predictions.length) return;
+    const exist = predictions.some((p) => p.id === selectedTracker);
+    if (!exist) setSelectedTracker(predictions[0].id);
+  }, [predictions, selectedTracker]);
+
+  useEffect(() => {
+    if (!autoReport) return;
+    renderReportCanvas(autoReport);
+  }, [autoReport]);
+
+  const trackerVendor = useMemo(() => predictions.find((p) => p.id === selectedTracker) || predictions[0] || null, [predictions, selectedTracker]);
+
+  return (
+    <div style={{ fontFamily: "DM Sans, sans-serif" }} className="min-h-screen bg-slate-900 text-slate-100">
+      <div className="flex min-h-screen">
+        <aside className="w-64 bg-slate-950 border-r border-slate-800 p-4 space-y-2">
+          <h1 className="text-xl font-extrabold mb-4">Pemda / Dinkes</h1>
+          {[{id:"monitor",label:"Monitor Dasbor"},{id:"alert",label:"Red Alert"},{id:"prediksi",label:"Tracker Progres Vendor"},{id:"simulasi",label:"Simulasi Keamanan"},{id:"rapor",label:"Auto-Rapor"},{id:"bosp",label:"Kontrol BOSP"}].map((item) => (
+            <button key={item.id} onClick={() => setNav(item.id)} className={`w-full text-left rounded-xl px-3 py-2 ${nav===item.id ? "bg-indigo-600" : "bg-slate-800"}`}>{item.label}</button>
+          ))}
+        </aside>
+
+        <main className="flex-1 p-6 space-y-4 overflow-auto">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div className="rounded-2xl bg-slate-800 border border-slate-700 p-3"><p className="text-xs text-slate-400">Status Alur</p><p className="font-bold">{state.status}</p></div>
+            <div className="rounded-2xl bg-slate-800 border border-slate-700 p-3"><p className="text-xs text-slate-400">YOLO</p><p className="font-bold uppercase">{state.yoloStatus}</p></div>
+            <div className="rounded-2xl bg-slate-800 border border-slate-700 p-3"><p className="text-xs text-slate-400">E-BAST</p><p className="font-bold uppercase">{state.ebastStatus}</p></div>
+            <div className="rounded-2xl bg-slate-800 border border-slate-700 p-3"><p className="text-xs text-slate-400">BOSP</p><p className="font-bold uppercase">{state.bospStatus}</p></div>
+          </div>
+
+          <div className="rounded-2xl bg-indigo-950/50 border border-indigo-700 p-3 text-sm flex flex-wrap gap-3 items-center justify-between">
+            <div>
+              <p className="font-semibold">Tracker Progress Vendor Hari Ini (5 Vendor Jakarta)</p>
+              <p className="text-slate-300 text-xs">Fokus versi awal: status proses pembuatan, perjalanan, atau sudah tiba</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-300">Vendor Berisiko: <b className="text-amber-300">{riskyVendors}</b> / {predictions.length}</span>
+              <button onClick={runTodayPrediction} disabled={predicting} className={`rounded-lg px-3 py-1.5 font-bold text-xs ${predicting ? "bg-slate-600" : "bg-indigo-600 hover:bg-indigo-500"}`}>{predicting ? "Memproses..." : "Refresh Prediksi"}</button>
+            </div>
+          </div>
+
+          {nav === "monitor" && (
+            <section className="rounded-2xl bg-slate-800 border border-slate-700 p-4 space-y-3">
+              <h2 className="text-lg font-bold">Monitor Dasbor Intelijen</h2>
+              <p className="text-sm text-slate-300">Vendor: {state.vendorName} | Minggu: {state.weekStart}</p>
+              <p className="text-sm text-slate-300">Update terakhir: {state.updatedAt}</p>
+              <div className="space-y-2 max-h-72 overflow-auto">
+                {(state.logs || []).map((log) => (
+                  <div key={log.id} className="rounded-lg border border-slate-700 px-3 py-2">
+                    <p className="text-sm">{log.message}</p>
+                    <p className="text-xs text-slate-400">{log.at}</p>
+                  </div>
+                ))}
+                {!state.logs?.length && <p className="text-sm text-slate-400">Belum ada log.</p>}
+              </div>
+            </section>
+          )}
+
+          {nav === "alert" && (
+            <section className="rounded-2xl bg-slate-800 border border-slate-700 p-4 space-y-3">
+              <h2 className="text-lg font-bold">Red Alert Panel</h2>
+              <p className={`text-sm font-semibold ${redAlert ? "text-red-300" : "text-emerald-300"}`}>{redAlert ? "RED ALERT AKTIF" : "Tidak ada red alert"}</p>
+              <div className="rounded-xl border border-slate-700 bg-slate-900/40 p-3 text-sm">
+                <p>Cross-Validation NLP: <b>{crossValidation.count}</b> keluhan medis identik dalam 6 jam.</p>
+                <p>Vendor/Sekolah terindikasi: <b>{crossValidation.vendorName}</b></p>
+                <p>Gejala dominan: <b>{crossValidation.symptomTag}</b> (ambang Red Alert: 3 keluhan/6 jam)</p>
+              </div>
+              <div className="space-y-2">
+                {(state.complaints || []).map((c) => (
+                  <div key={c.id} className="rounded-lg border border-slate-700 px-3 py-2">
+                    <p className="text-sm">[{c.actor}] {c.text}</p>
+                    <p className="text-xs text-slate-400">{c.at} - {c.severity}</p>
+                  </div>
+                ))}
+                {!state.complaints?.length && <p className="text-sm text-slate-400">Belum ada keluhan publik.</p>}
+              </div>
+            </section>
+          )}
+
+          {nav === "prediksi" && (
+            <section className="rounded-2xl bg-slate-800 border border-slate-700 p-4 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-lg font-bold">Tracker Progress Vendor - 5 Vendor ke 5 Sekolah Jakarta</h2>
+                <p className="text-xs text-slate-300">Update: {lastPredictAt}</p>
+              </div>
+              {predError && <p className="text-sm text-red-300">{predError}</p>}
+              <div className="rounded-xl bg-slate-900 border border-slate-700 p-3 text-sm">
+                <p className="font-semibold text-slate-200 mb-1">Ringkasan Progres Hari Ini</p>
+                <p className="text-slate-300">Pantau status operasional vendor: apakah masih proses pembuatan, dalam perjalanan, atau sudah tiba di sekolah.</p>
+              </div>
+              <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="font-semibold">Simulasi Lokasi Vendor (Google Maps API URL)</p>
+                  <select value={selectedTracker} onChange={(e) => setSelectedTracker(e.target.value)} className="rounded-lg bg-slate-800 border border-slate-600 px-3 py-1.5 text-sm">
+                    {predictions.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                  </select>
+                </div>
+                {trackerVendor && (
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                    <div className="lg:col-span-2 rounded-lg overflow-hidden border border-slate-700 bg-white">
+                      <iframe title="Google Maps Tracker" src={trackerVendor.mapEmbedUrl} className="w-full h-72" loading="lazy"></iframe>
+                    </div>
+                    <div className="rounded-lg border border-slate-700 bg-slate-800 p-3 text-sm">
+                      <p><span className="text-slate-300">Vendor:</span> {trackerVendor.name}</p>
+                      <p><span className="text-slate-300">Status:</span> <b>{stageIcon(trackerVendor.stage)} {trackerVendor.stage}</b></p>
+                      <p><span className="text-slate-300">Koordinat Simulasi:</span></p>
+                      <p className="text-xs">Lat: {trackerVendor.currentLat.toFixed(5)}</p>
+                      <p className="text-xs">Lng: {trackerVendor.currentLng.toFixed(5)}</p>
+                      <p className="mt-2 text-xs text-slate-300">Progress {trackerVendor.progress}% • ETA {trackerVendor.eta}</p>
+                      <a href={trackerVendor.routeEmbedUrl.replace("&output=embed", "")} target="_blank" className="inline-block mt-3 rounded bg-slate-700 px-3 py-1.5 text-xs font-semibold">Lihat Rute Penuh</a>
+                      <a href={`https://www.google.com/maps/dir/?api=1&origin=${trackerVendor.originLat},${trackerVendor.originLng}&destination=${trackerVendor.destLat},${trackerVendor.destLng}&travelmode=driving`} target="_blank" className="inline-block mt-3 rounded bg-indigo-600 px-3 py-1.5 text-xs font-semibold">Buka Navigasi Google Maps</a>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+                  <p className="text-slate-300">Proses Pembuatan</p>
+                  <p className="text-xl font-bold text-amber-300">{predictions.filter((v) => v.stage === "Proses Pembuatan").length}</p>
+                </div>
+                <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+                  <p className="text-slate-300">Dalam Perjalanan</p>
+                  <p className="text-xl font-bold text-sky-300">{predictions.filter((v) => v.stage === "Dalam Perjalanan").length}</p>
+                </div>
+                <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+                  <p className="text-slate-300">Tiba di Sekolah</p>
+                  <p className="text-xl font-bold text-emerald-300">{predictions.filter((v) => v.stage === "Tiba di Sekolah").length}</p>
+                </div>
+              </div>
+              <div className="overflow-auto rounded-xl border border-slate-700">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-900">
+                    <tr>
+                      <th className="text-left p-2">Vendor</th>
+                      <th className="text-left p-2">Sekolah</th>
+                      <th className="text-left p-2">Status Progres</th>
+                      <th className="text-left p-2">Progress</th>
+                      <th className="text-left p-2">GPS Tracker</th>
+                      <th className="text-left p-2">Prediksi ETA</th>
+                      <th className="text-left p-2">Keterangan</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {predictions.map((v) => (
+                      <tr key={v.id} className="border-t border-slate-700">
+                        <td className="p-2">{v.name}</td>
+                        <td className="p-2">{v.school}</td>
+                        <td className="p-2 font-semibold">{stageIcon(v.stage)} {v.stage}</td>
+                        <td className="p-2">
+                          <div className="w-36 h-2 rounded bg-slate-700 overflow-hidden">
+                            <div className={`h-2 ${v.progress >= 100 ? "bg-emerald-500" : v.progress >= 70 ? "bg-sky-500" : "bg-amber-500"}`} style={{ width: `${v.progress}%` }}></div>
+                          </div>
+                          <div className="text-xs text-slate-300 mt-1">{v.progress}%</div>
+                        </td>
+                        <td className="p-2">
+                          <div className="text-xs">Kecepatan: <b>{v.gpsSpeed} km/jam</b></div>
+                          <div className="text-xs">Jarak: <b>{v.routeDistanceKm} km</b></div>
+                          <div className="text-xs text-slate-300">Rute: {v.roadCondition}</div>
+                        </td>
+                        <td className="p-2">{v.eta} {v.delayMinutes > 0 ? `( +${v.delayMinutes}m )` : "(tepat waktu)"}</td>
+                        <td className={`p-2 font-semibold ${scoreToLevel(v.todayScore).cls}`}>{v.todayLevel}</td>
+                      </tr>
+                    ))}
+                    {!predictions.length && (
+                      <tr><td className="p-3 text-slate-400" colSpan="7">Belum ada hasil prediksi.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {nav === "simulasi" && (
+            <section className="rounded-2xl bg-slate-800 border border-slate-700 p-4 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-lg font-bold">Simulasi Keamanan (2 Pilar)</h2>
+                <button onClick={runSecurityScaleSimulation} disabled={simRunning} className={`rounded-lg px-3 py-1.5 font-bold text-xs ${simRunning ? "bg-slate-600" : "bg-indigo-600 hover:bg-indigo-500"}`}>{simRunning ? "Mensimulasikan..." : "Jalankan Simulasi"}</button>
+              </div>
+
+              <div className="rounded-xl border border-red-800 bg-red-950/20 p-3 text-sm space-y-2">
+                <p className="font-semibold text-red-200">🛡️ Pilar 1: Keamanan Pangan (Food Safety)</p>
+                <p className="text-slate-300">Diterapkan di App Orang Tua/Siswa (form keluhan), diproses Gemini di backend, dan dimonitor di dashboard Pemda.</p>
+                <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3 space-y-1">
+                  <p><span className="font-semibold">Input keluhan:</span> {simResult.sampleComplaint}</p>
+                  <p><span className="font-semibold">Cross-Validation:</span> Gemini mendeteksi <b>{simResult.reportsIn6Hours}</b> keluhan medis identik pada <b>{simResult.sameSchoolVendor}</b> dalam 6 jam.</p>
+                  <p><span className="font-semibold">Trigger Red Alert:</span> Ambang = {simResult.threshold} keluhan/6 jam.</p>
+                  <p className={simResult.redAlertActive ? "text-red-300 font-semibold" : "text-emerald-300 font-semibold"}>
+                    Status: {simResult.redAlertActive ? "RED ALERT AKTIF - indikasi KLB" : "Belum memenuhi ambang KLB"}
+                  </p>
+                  <p className={simResult.distributionStopped ? "text-amber-300 font-semibold" : "text-slate-300"}>
+                    Tindakan Pemda: {simResult.distributionStopped ? "Distribusi vendor dihentikan sementara untuk mencegah korban bertambah" : "Distribusi dipantau ketat, belum dihentikan"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                <div className="rounded-xl border border-slate-700 p-3 bg-slate-900/50">
+                  <p className="font-semibold">🔐 Pilar 2: Privasi Pelapor (Supabase RLS + Data Aggregation)</p>
+                  <p className="mt-2">SSO Terenkripsi: <span className="font-bold text-emerald-300">{simResult.ssoEncrypted ? "Aktif" : "Nonaktif"}</span></p>
+                  <p>Row Level Security (RLS): <span className="font-bold text-emerald-300">{simResult.rlsEnabled ? "Aktif - vendor tidak bisa baca identitas pelapor" : "Nonaktif"}</span></p>
+                  <p>Tampilan Dashboard Pemda (agregat): <span className="font-bold text-sky-300">{simResult.dataAggregatedView}</span></p>
+                  <p className="text-xs text-slate-400 mt-2">Identitas nama/no HP pelapor dilucuti untuk mencegah de-anonimisasi dan intimidasi.</p>
+                </div>
+
+                <div className="rounded-xl border border-slate-700 p-3 bg-slate-900/50">
+                  <p className="font-semibold">🔐 Pilar 2: Anti-Curang & Legalitas Keuangan</p>
+                  <p className="mt-2">Anti-Spoofing Vendor: <span className="font-bold text-emerald-300">{simResult.antiSpoofing ? "Aktif" : "Nonaktif"}</span></p>
+                  <p>Depth Estimation (YOLOv8 Edge): <span className="font-bold text-emerald-300">{simResult.depthEstimation ? "Aktif" : "Nonaktif"}</span></p>
+                  <p>E-BAST ber-TTE BSrE BSSN: <span className="font-bold text-emerald-300">{simResult.tteBssn ? "Aktif (legal & anti-pemalsuan)" : "Nonaktif"}</span></p>
+                  <p className="text-xs text-slate-400 mt-2">Dokumen E-BAST ditandatangani elektronik tersertifikasi sehingga sah di audit BPK dan sulit dimanipulasi.</p>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-indigo-700 bg-indigo-950/40 p-3 text-sm">
+                <p className="font-semibold mb-1">Ringkasan Simulasi</p>
+                <p>Sistem keamanan dibangun dua lapis: perlindungan korban lewat deteksi KLB berbasis cross-validation dan perlindungan data/legalitas melalui RLS, anti-spoofing, serta TTE BSSN.</p>
+                <p className="text-xs text-slate-300 mt-2">Update simulasi: {simResult.updatedAt}</p>
+              </div>
+            </section>
+          )}
+
+          {nav === "rapor" && (
+            <section className="rounded-2xl bg-slate-800 border border-slate-700 p-4 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-lg font-bold">Auto-Rapor (Simulasi Gemini)</h2>
+                <div className="flex items-center gap-2">
+                  <button onClick={generateAutoReport} disabled={reportGenerating} className={`rounded-lg px-3 py-1.5 font-bold text-xs ${reportGenerating ? "bg-slate-600" : "bg-indigo-600 hover:bg-indigo-500"}`}>{reportGenerating ? "Gemini menyusun laporan..." : "Generate Auto-Rapor"}</button>
+                  <button onClick={exportCanvasToPdf} disabled={!canvasReady} className={`rounded-lg px-3 py-1.5 font-bold text-xs ${canvasReady ? "bg-emerald-600 hover:bg-emerald-500" : "bg-slate-600"}`}>Unduh PDF</button>
+                </div>
+              </div>
+
+              {!autoReport && !reportGenerating && (
+                <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-4 text-sm text-slate-300">
+                  Klik tombol Generate Auto-Rapor untuk menyusun laporan birokrasi otomatis berbasis data PoC.
+                </div>
+              )}
+
+              {autoReport && (
+                <div className="space-y-4 text-sm">
+                  <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3">
+                    <p className="font-semibold mb-2">Canvas Dokumen (Siap Arsip/PDF)</p>
+                    <div className="overflow-auto rounded-lg border border-slate-700 bg-slate-950 p-3">
+                      <canvas ref={reportCanvasRef} className="w-full max-w-[900px] mx-auto bg-white rounded" />
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-indigo-700 bg-indigo-950/40 p-3">
+                    <p className="font-semibold">Waktu Generate</p>
+                    <p className="text-slate-300">{autoReport.generatedAt}</p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3 space-y-2">
+                    <p className="font-semibold">1. Ringkasan Eksekutif Kinerja (Overview)</p>
+                    <p>Kinerja BOSP Keseluruhan: <span className="text-slate-300">{autoReport.executive.bospPerformance}</span></p>
+                    <p>Tingkat Kepatuhan Gizi: <span className="text-slate-300">{autoReport.executive.nutritionCompliance}</span></p>
+                    <p>Efisiensi Anggaran: <span className="text-slate-300">{autoReport.executive.budgetEfficiency}</span></p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3 space-y-3">
+                    <p className="font-semibold">2. Penilaian Per-Vendor (Rapor SPPG)</p>
+                    <div className="overflow-auto rounded-lg border border-slate-700">
+                      <table className="min-w-full text-sm">
+                        <thead className="bg-slate-900">
+                          <tr>
+                            <th className="text-left p-2">Vendor</th>
+                            <th className="text-left p-2">Skor Kinerja</th>
+                            <th className="text-left p-2">Log Insiden</th>
+                            <th className="text-left p-2">Catatan Force Majeure</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {autoReport.vendorReport.map((v) => (
+                            <tr key={v.id} className="border-t border-slate-700">
+                              <td className="p-2">{v.name}</td>
+                              <td className="p-2 font-semibold">{v.score}</td>
+                              <td className="p-2">{v.incidents.join("; ")}</td>
+                              <td className="p-2">{v.forceMajeure}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3 space-y-2">
+                    <p className="font-semibold">3. Analisis Konsumsi dan Aspirasi Publik</p>
+                    <p>Indeks Sisa Pangan (Zero-Waste): <span className="text-slate-300">{autoReport.publicAnalysis.zeroWasteIndex}</span></p>
+                    <p>Rangkuman Sentimen Wali Murid:</p>
+                    <ul className="list-disc pl-5 text-slate-300">
+                      {autoReport.publicAnalysis.keySentiment.map((s, idx) => <li key={idx}>{s}</li>)}
+                    </ul>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-700 bg-slate-900/50 p-3 space-y-2">
+                    <p className="font-semibold">4. Rekomendasi Tindakan (AI Advisory)</p>
+                    <ul className="list-disc pl-5 text-slate-300">
+                      {autoReport.advisor.map((a, idx) => <li key={idx}>{a}</li>)}
+                    </ul>
+                    <p className="font-semibold mt-2">Narasi Formal Siap Cetak</p>
+                    <p className="text-slate-300">{autoReport.formalNarrative}</p>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
+          {nav === "bosp" && (
+            <section className="rounded-2xl bg-slate-800 border border-slate-700 p-4 space-y-3">
+              <h2 className="text-lg font-bold">Kontrol Pencairan BOSP</h2>
+              <p className="text-sm text-slate-300">Sesuai diagram: jika red alert maka dana ditahan untuk investigasi.</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <button onClick={forceHold} className="rounded-xl bg-red-600 py-2 font-bold">Tahan E-BAST & BOSP</button>
+                <button onClick={releaseBosp} className="rounded-xl bg-emerald-600 py-2 font-bold">Lanjutkan Pencairan</button>
+              </div>
+            </section>
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
