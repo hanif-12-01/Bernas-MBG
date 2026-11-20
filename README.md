@@ -1,4 +1,4 @@
-# Bernas-MBG (GiziOptima) — Adaptive Kitchen Operations & Procurement Recovery Engine
+GiziOptima — Adaptive Kitchen Operations & Procurement Recovery Engine
 
 > **Peringatan Penting (`DEMO_ONLY` / Simulasi Teknis):** Seluruh data bawaan dan fixture uji bersifat **sintetis untuk demonstrasi teknis**. Aplikasi ini adalah sistem pendukung keputusan operasional internal dapur SPPG dan **bukan** pengganti validasi ahli gizi klinis, uji laboratorium/BPOM, sertifikasi halal/SLHS, ataupun sistem resmi BGN/SIPGN.
 
