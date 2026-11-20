@@ -1,0 +1,31 @@
+# Python / FastAPI
+services/api/.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node / Next.js
+apps/web/node_modules/
+apps/web/.next/
+apps/web/out/
+apps/web/tsconfig.tsbuildinfo
+
+# Local Databases & Private Uploads
+services/api/*.db
+services/api/*.db-shm
+services/api/*.db-wal
+services/api/private_uploads/
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Playwright MCP scratch & transient logs
+.playwright-mcp/
+qa/evidence/*.log
+*.log
+tmp/

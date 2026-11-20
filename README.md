@@ -1,118 +1,111 @@
-# Bernas MBG - Multi Dashboard PoC
+# Bernas-MBG (GiziOptima) — Adaptive Kitchen Operations & Procurement Recovery Engine
 
-Proof of Concept (PoC) aplikasi Bernas MBG berbasis dashboard terpisah untuk berbagai peran: Vendor, Guru, Murid, Wali Murid, Pemda, dan Super Admin.
+> **Peringatan Penting (`DEMO_ONLY` / Simulasi Teknis):** Seluruh data bawaan dan fixture uji bersifat **sintetis untuk demonstrasi teknis**. Aplikasi ini adalah sistem pendukung keputusan operasional internal dapur SPPG dan **bukan** pengganti validasi ahli gizi klinis, uji laboratorium/BPOM, sertifikasi halal/SLHS, ataupun sistem resmi BGN/SIPGN.
 
-Aplikasi ini dibuat sebagai simulasi alur MBG dari unggah menu oleh vendor sampai validasi, eskalasi keluhan, dan kontrol pencairan BOSP.
+**Bernas-MBG (`GiziOptima`)** menggantikan PoC dashboard HTML statis awal dengan platform full-stack persisten berbasis **Next.js 15 + FastAPI + SQLAlchemy/Alembic + PuLP/CBC MILP** untuk perencanaan menu MBG berbasis resep terverifikasi, pengawasan kualitas stok per lot, penanganan insiden bahan bermasalah (*Safety Hold*), pemulihan gangguan minim perubahan (*Minimum-Disruption Optimization*), serta verifikasi visual menu berbantuan AI (*human-in-the-loop*).
 
-## Demo Entry Point
+---
 
-- `index.html` sebagai launcher semua dashboard.
-- Halaman app berada di folder `apps/`.
+## Fitur Utama
 
-## Struktur Proyek
+1. **Optimasi Menu Berbasis Resep & Verifikasi Independen (MILP PuLP/CBC):**
+   - Menyusun jadwal menu multi-hari (`staple`, `protein`, `vegetable`, `fruit`) hanya dari varian resep berstatus `reviewed` sambil menegakkan kendala keras anggaran, kecukupan nutrisi (berbasis BDD dan retensi gizi), alergen, pengulangan keluarga menu, dan batas stok bersih.
+   - Setiap solusi diverifikasi ulang secara independen dari data mentah oleh `optimizer/verifier.py`; skenario yang tidak memenuhi seluruh kendala dilaporkan jujur sebagai `INFEASIBLE` tanpa rekomendasi menu buatan.
+
+2. **Fondasi Kualitas Inventaris, Lot Batch & Referensi Pasar Indonesia:**
+   - Memisahkan `recorded_raw_g` vs `usable_raw_g` secara sadar tanggal produksi (`expires_at`, kerusakan, reservasi aktif, selisih fisik, pengiriman `PARTIAL`/`DELAYED`).
+   - Memisahkan tabel referensi harga pasar pangan Indonesia (`market_price_references`) dari harga pemasok nyata (`ingredient_prices`) dengan pelacakan `price_provenance`.
+
+3. **Penahanan Keamanan Bahan Bermasalah (`SAFETY HOLD`) & Anti-Bypass:**
+   - Pelaporan insiden multi-lot/multi-bahan (`SPOILAGE`, `SUSPECTED_CONTAMINATION`, `ABNORMAL_ODOR_APPEARANCE`, dll.) langsung mengisolasi lot terdampak (`ON_HOLD` / `REJECTED_DISPOSED`) di `compute_usable_inventory` tanpa menahan lot bersih terpisah.
+   - Otomatis membekukan rencana operasional aktif yang memakai bahan tersebut (`ON_HOLD`), menelusuri potensi paparan produksi (`PRODUCTION_CONSUMPTION`, reservasi, batch masakan), serta menolak pelepasan sepihak internal (`POST /api/v1/incidents/{id}/release-hold` → `403 Forbidden`) maupun *stock override* (`409 Conflict`).
+
+4. **Pemulihan Pengadaan Adaptif (`MIN_DISRUPTION` vs `MIN_COST`):**
+   - Formulasi leksikografis 2-tahap meminimalkan jumlah pergantian slot menu ($D_{\min}$) terlebih dahulu, lalu meminimalkan total biaya pengadaan pada kondisi stok lot bersih & harga terbaru.
+   - Menyajikan perbandingan kontrafaktual 4-arah yang adil tanpa klaim penghematan palsu, delta pengadaan ekspor CSV aman formula, dan *stale inventory snapshot guard* (`409 Conflict`).
+
+5. **Siklus Hidup Rencana Operasional & Pemeriksaan Menu AI (`QC`):**
+   - Memisahkan riwayat persetujuan historis (`MenuReviewRecord`) dari penugasan operasional efektif (`operational_plan_assignments`: `ACTIVE`, `ON_HOLD`, `SUPERSEDED`, `APPROVED_NOT_ACTIVE`) dengan aktivasi eksplisit oleh `KITCHEN_MANAGER` dan pemblokiran pemeriksaan QC baru atas rencana `ON_HOLD`/`SUPERSEDED`.
+   - Autentikasi sesi cookie `HttpOnly` + CSRF (`Argon2id`), RBAC backend (`KITCHEN_MANAGER`, `MENU_PLANNER`, `QC_OFFICER`), isolasi antar-dapur, penghapusan metadata EXIF pada unggahan foto, serta adaptor Vision QC (`deterministic_test` / OpenAI / Gemini) dengan konfirmasi wajib Petugas QC.
+
+---
+
+## Struktur Repositori
 
 ```text
 .
-|-- index.html
-|-- DOKUMENTASI_SCREENSHOT_PROPOSAL.txt
-`-- apps/
-    |-- vendor.html
-    |-- guru.html
-    |-- murid.html
-    |-- wali.html
-    |-- pemda.html
-    `-- super_admin.html
+├── apps/
+│   └── web/                  # Frontend Next.js 15 App Router + React 19 + Tailwind CSS v4
+├── services/
+│   └── api/                  # Backend FastAPI + SQLAlchemy 2 + Alembic + PuLP/CBC MILP
+│       ├── alembic/          # Migrasi skema hingga 0006_sprint3b1_3c_ops_incidents
+│       ├── app/
+│       │   ├── api/routes/   # Endpoint REST v1 (/auth, /datasets, /scenarios, /recovery, /incidents, /operational-plans, /qc, /dashboard)
+│       │   ├── data/         # Fixture deterministik DEMO_ONLY (termasuk Recovery 3B & Triple Incident 3C)
+│       │   ├── db/           # Model ORM & SQLiteVaultRepository
+│       │   ├── incidents/    # Layanan penahanan keamanan & paparan produksi
+│       │   ├── inventory/    # Normalisasi satuan, mapping bahan & usable inventory
+│       │   ├── operations/   # Mesin siklus hidup rencana operasional
+│       │   ├── optimizer/    # MILP model builder, solver CBC, verifier independen & diagnostik
+│       │   ├── recovery/     # Mesin optimasi minimum-disruption & delta belanja
+│       │   ├── reviews/      # Alur peninjauan rencana & snapshot guard
+│       │   └── vision/       # Keamanan foto QC & adaptor Vision AI
+│       ├── scripts/          # CLI manajemen dapur/user & seed akun demo
+│       └── tests/            # Suite pengujian otomatis pytest (82 test)
+├── datasets/                 # Artefak dataset pendukung
+└── qa/                       # Bukti QA, screenshot lintas viewport & evaluasi vision held-out
 ```
 
-## Teknologi
+---
 
-- HTML single-file per dashboard
-- React 18 (UMD) + ReactDOM
-- Babel Standalone (`text/babel`)
-- Tailwind CSS via CDN
-- LocalStorage untuk state bersama antar dashboard
+## Cara Menjalankan Secara Lokal
 
-## Kunci State Bersama
+### 1. Prasyarat
+- Python 3.11+ & `pip`
+- Node.js 20+ & `npm`
 
-Dashboard menggunakan localStorage sebagai media sinkronisasi data antar peran:
+### 2. Backend (`services/api`)
 
-- `mbg_poc_state_v1`: state utama proses MBG
-- `mbg_sso_session`: simulasi sesi login multi-peran
+```powershell
+cd services/api
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\alembic.exe upgrade head
+.\.venv\Scripts\python.exe scripts/seed_demo_users.py
 
-## Ringkasan Fitur Per Dashboard
+# Mode uji deterministik untuk demonstrasi lokal tanpa API key Vision eksternal
+$env:GIZIOPTIMA_VISION_PROVIDER="deterministic_test"
+.\.venv\Scripts\uvicorn.exe app.main:app --host 127.0.0.1 --port 8000
+```
 
-### 1) Vendor (`apps/vendor.html`)
+Dokumentasi OpenAPI tersedia di `http://127.0.0.1:8000/docs`.
 
-- Upload menu/foto harian SPPG.
-- Update progres operasional:
-  - `FotoDiunggahSPPG`
-  - `DalamPengiriman`
-  - `TibaDiSekolah`
-- Menulis log aktivitas yang bisa dipantau dashboard lain.
+### 3. Frontend (`apps/web`)
 
-### 2) Guru (`apps/guru.html`)
+```powershell
+cd apps/web
+copy .env.example .env.local
+npm install
+npm run build
+npm run start
+```
 
-- Melakukan 2 scan wajib (kedatangan vendor + validasi makanan aktual).
-- Simulasi validasi YOLO status `valid` atau `tidak_sesuai`.
-- Menerbitkan E-BAST jika syarat terpenuhi.
-- Menahan E-BAST/BOSP otomatis jika ada indikasi masalah (keluhan kritis atau hasil scan tidak sesuai).
+Buka `http://127.0.0.1:3000` di browser.
 
-### 3) Murid (`apps/murid.html`)
+---
 
-- Melihat status menu harian dan progres MBG.
-- Mengirim keluhan/aspirasi.
-- Keluhan dengan kata kunci kritis akan memicu red alert dan menahan E-BAST/BOSP.
-- Melihat riwayat keluhan yang pernah dikirim.
+## Verifikasi Pengujian
 
-### 4) Wali Murid (`apps/wali.html`)
+- **Backend (`services/api`):**
+  ```powershell
+  .\.venv\Scripts\pytest.exe -q
+  ```
+  Tercatat **82 passed, 0 failed** (termasuk roundtrip migrasi Alembic `0006`, uji balapan aktivasi paralel, integrasi pemulihan minimum-disruption, insiden safety hold 3 bahan, penghapusan EXIF, RBAC/isolasi dapur, dan persistensi lintas proses).
 
-- Login peran wali murid.
-- Menyampaikan keluhan/validasi publik terkait kualitas layanan MBG.
-- Ikut berkontribusi pada data keluhan yang dipantau Pemda.
-
-### 5) Pemda (`apps/pemda.html`)
-
-- Command center monitoring status MBG lintas peran.
-- Modul red alert, cross-validation keluhan, dan simulasi keamanan pangan.
-- Tracker progres vendor.
-- Auto-rapor dan narasi rekomendasi berbasis data simulasi.
-- Kontrol keputusan pencairan BOSP (`tahan` atau `lanjutkan`).
-
-### 6) Super Admin (`apps/super_admin.html`)
-
-- Monitoring umum sistem dan operasional.
-- Manajemen user dan role/permission.
-- Master data dan operational status.
-- Log sistem dan simulasi backup.
-
-## Alur Simulasi Utama
-
-1. Vendor upload menu/foto dan ubah status pengiriman.
-2. Guru melakukan scan wajib dan validasi kualitas.
-3. Murid/Wali dapat mengirim keluhan.
-4. Pemda memantau alert, membaca pola keluhan, dan menentukan kontrol BOSP.
-5. Super Admin memantau health sistem, user, role, dan konfigurasi.
-
-## Cara Menjalankan
-
-Karena ini aplikasi statis, jalankan dengan local web server.
-
-Contoh cepat:
-
-1. Buka folder proyek.
-2. Jalankan Live Server (VS Code) atau server statis lain.
-3. Akses `http://localhost:5500` lalu buka `index.html`.
-
-## Catatan PoC
-
-- Fokus utama adalah validasi alur bisnis dan pengalaman dashboard lintas peran.
-- Belum menggunakan backend production, database, autentikasi real, atau integrasi AI/model production.
-- Data bersifat simulasi dan disimpan lokal di browser.
-
-## Rencana Pengembangan Lanjutan
-
-- Integrasi backend API untuk state terpusat.
-- Autentikasi RBAC berbasis token.
-- Integrasi model AI/vision dan NLP service production.
-- Audit trail dan observability end-to-end.
-- Hardening keamanan dan pengujian otomatis.
+- **Frontend (`apps/web`):**
+  ```powershell
+  npm run typecheck
+  npm test
+  npm run build
+  ```
+  Tercatat **0 error TypeScript**, **6 test files / 21 Vitest passed**, serta **13/13 rute `next build`** terkompilasi bersih dan teruji responsif tanpa horizontal overflow pada lebar `320 px` s.d. `1440 px`.

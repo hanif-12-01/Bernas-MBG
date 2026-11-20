@@ -1,0 +1,5 @@
+{
+  "status": "configuration_required",
+  "detail": "Vision AI memerlukan konfigurasi server. Hubungi administrator untuk mengaktifkan analisis foto.",
+  "performed_live_requests": false
+}

@@ -1,0 +1,3 @@
+commodity_code,commodity_name,canonical_ingredient_code,region,observed_date,price_value,unit,published_at,quality_status,notes
+BAP-BERAS-MED,Beras Medium (Referensi Pasar Resmi),ING001,DKI Jakarta,2026-11-18,14500,IDR/kg,2026-11-18,REFERENCE_ONLY,Templat manual data resmi Bapanas SAPA/Panel Harga — bukan harga kontrak dapur
+BAP-AYAM-RAS,Daging Ayam Ras Murni (Referensi Pasar),ING007,Jawa Barat,2026-11-18,39500,IDR/kg,2026-11-18,REFERENCE_ONLY,Templat manual data resmi Bapanas — bukan stok dapur

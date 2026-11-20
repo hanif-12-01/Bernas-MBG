@@ -1,0 +1,842 @@
+[
+  {
+    "role": "perencana_menu",
+    "route": "/dashboard",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/dashboard",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/dashboard",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/dashboard",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/dashboard",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/dashboard",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/dashboard",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/menu-planning",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/menu-planning",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/menu-planning",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/menu-planning",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/menu-planning",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/menu-planning",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/menu-planning",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/simulator",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/simulator",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/simulator",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/simulator",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/simulator",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/simulator",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/simulator",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/inventory",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/inventory",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/inventory",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/inventory",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/inventory",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/inventory",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/inventory",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/shopping-list",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/shopping-list",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/shopping-list",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/shopping-list",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/shopping-list",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/shopping-list",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/shopping-list",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/settings",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/settings",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/settings",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/settings",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/settings",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/settings",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "perencana_menu",
+    "route": "/settings",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/dashboard",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/dashboard",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/dashboard",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/dashboard",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/dashboard",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/dashboard",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/dashboard",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/menu-planning",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/menu-planning",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/menu-planning",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/menu-planning",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/menu-planning",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/menu-planning",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/menu-planning",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/inventory",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/inventory",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/inventory",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/inventory",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/inventory",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/inventory",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/inventory",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/shopping-list",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/shopping-list",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/shopping-list",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/shopping-list",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/shopping-list",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/shopping-list",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/shopping-list",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/settings",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/settings",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/settings",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/settings",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/settings",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/settings",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/settings",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/kitchen-qc",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/kitchen-qc",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/kitchen-qc",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/kitchen-qc",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/kitchen-qc",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/kitchen-qc",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "kepala_dapur",
+    "route": "/kitchen-qc",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/dashboard",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/dashboard",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/dashboard",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/dashboard",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/dashboard",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/dashboard",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/dashboard",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/menu-planning",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/menu-planning",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/menu-planning",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/menu-planning",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/menu-planning",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/menu-planning",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/menu-planning",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/kitchen-qc",
+    "width": 320,
+    "layout": 320,
+    "scroll": 320,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/kitchen-qc",
+    "width": 375,
+    "layout": 375,
+    "scroll": 375,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/kitchen-qc",
+    "width": 390,
+    "layout": 390,
+    "scroll": 390,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/kitchen-qc",
+    "width": 428,
+    "layout": 428,
+    "scroll": 428,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/kitchen-qc",
+    "width": 768,
+    "layout": 768,
+    "scroll": 768,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/kitchen-qc",
+    "width": 1024,
+    "layout": 1024,
+    "scroll": 1024,
+    "errors": []
+  },
+  {
+    "role": "petugas_qc",
+    "route": "/kitchen-qc",
+    "width": 1440,
+    "layout": 1440,
+    "scroll": 1440,
+    "errors": []
+  }
+]

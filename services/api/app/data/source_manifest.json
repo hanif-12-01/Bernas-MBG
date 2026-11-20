@@ -1,0 +1,83 @@
+{
+  "manifest_version": "3A.6-v1",
+  "audited_at": "2026-11-20T06:55:00Z",
+  "sources": [
+    {
+      "source_name": "CMU MLIP Data Quality — Inventory Management Case Study",
+      "source_url": "https://github.com/mlip-cmu/data-quality/tree/main/inventory-data",
+      "license": "NONE_SPECIFIED",
+      "license_verified": false,
+      "dataset_type": "conceptual_reference",
+      "retrieved_at": "2026-11-20T06:53:38Z",
+      "checksum": null,
+      "allowed_use": "CONCEPTUAL_REFERENCE_ONLY_DO_NOT_COPY_DATA",
+      "transformation_notes": "Verified HTTP 200 (60 clean / 64 dirty products, 12/13 suppliers, 198,421 clean deliveries, 5,824 dirty_errors rows, 2024-01-01..2025-12-31). GitHub repository metadata has license=null and no LICENSE file; therefore zero rows or files were copied. Adopted conceptual failure taxonomy: duplicate deliveries, received_at vs entered_at lag, stock count discrepancy, and illegal units (kg vs lbs/KG)."
+    },
+    {
+      "source_name": "FMCG Batch-Aware Inventory Analytics Pipeline (niil29)",
+      "source_url": "https://github.com/niil29/fmcg-inventory-analytics",
+      "license": "NONE_SPECIFIED",
+      "license_verified": false,
+      "dataset_type": "conceptual_reference",
+      "retrieved_at": "2026-11-20T06:53:38Z",
+      "checksum": null,
+      "allowed_use": "CONCEPTUAL_REFERENCE_ONLY_DO_NOT_COPY_DATA",
+      "transformation_notes": "Verified HTTP 200 (25 products, 5 warehouses, 12 suppliers, 365 days synthetic SQL/Python pipeline). GitHub repository metadata has license=null and no LICENSE file; therefore zero rows or scripts were copied. Adopted conceptual batch-expiry, expiry write-off/shrinkage adjustments, goods receipts, and supplier lead-time modeling."
+    },
+    {
+      "source_name": "GiziOptima Inventory Quality Synthetic Fixture v1 (DEMO_ONLY)",
+      "source_url": "repo://services/api/app/data/inventory_quality_fixture.py",
+      "license": "PROJECT_AUTHORED_INTERNAL_DEMO",
+      "license_verified": true,
+      "dataset_type": "synthetic",
+      "retrieved_at": "2026-11-20T07:00:00Z",
+      "checksum": "deterministic-seed-20261120",
+      "allowed_use": "DEV_AND_QA_SYNTHETIC_ONLY",
+      "transformation_notes": "Independently authored deterministic Indonesian SPPG inventory transaction, batch lot, reservation, partial/delayed supplier delivery, unit-quarantine, and physical reconciliation fixture (seed=20261120). Explicitly labeled DEMO_ONLY / synthetic."
+    },
+    {
+      "source_name": "Badan Pangan Nasional — Publikasi Stok & Rata-rata Harga Pangan (SAPA)",
+      "source_url": "https://data.badanpangan.go.id/datasetpublications/1ti/jumlah-stok-pangan",
+      "license": "RESTRICTED_SAPA_PORTAL",
+      "license_verified": false,
+      "dataset_type": "official_reference",
+      "retrieved_at": "2026-11-20T06:53:38Z",
+      "checksum": null,
+      "allowed_use": "MANUAL_AUTHORIZED_CSV_IMPORT_ONLY",
+      "transformation_notes": "Verified HTTP 200 metadata page stating 'Dataset Terbatas — Informasi lengkap dan data lengkap hanya tersedia pada S.A.P.A (https://sapa.badanpangan.go.id/)'. Unit Ton (national monthly stock) and Rp/kg (provincial consumer/producer monthly average). Not scraped; supported via manual authorized reference CSV import kept strictly separate from kitchen stock."
+    },
+    {
+      "source_name": "Panel Harga Pangan Badan Pangan Nasional",
+      "source_url": "https://panelharga.badanpangan.go.id/",
+      "license": "CAPTCHA_GATED_WEB_PORTAL",
+      "license_verified": false,
+      "dataset_type": "official_reference",
+      "retrieved_at": "2026-11-20T06:53:38Z",
+      "checksum": null,
+      "allowed_use": "MANUAL_AUTHORIZED_CSV_IMPORT_ONLY",
+      "transformation_notes": "Verified Angular SPA with Google reCAPTCHA protection. Per policy, no automated scraping or CAPTCHA bypass implemented. Authorized exports must be imported manually via market-reference CSV template."
+    },
+    {
+      "source_name": "Badan Pangan Nasional — Indikator Anomali Harga Pangan Strategis Oktober 2026",
+      "source_url": "https://data.badanpangan.go.id/datasetpublications/lxy/indikator-anomali-harga-pangan-strategis-oktober-2026",
+      "license": "PUBLIC_OPEN_DATA_PORTAL",
+      "license_verified": true,
+      "dataset_type": "official_reference",
+      "retrieved_at": "2026-11-20T06:55:01Z",
+      "checksum": null,
+      "allowed_use": "REFERENCE_INDEX_ONLY_NOT_DIRECT_PRICE",
+      "transformation_notes": "Direct CSV/JSON/XLSX downloads exist without SAPA gate, but payload measures dimensionless CGR anomaly index at national level rather than Rp/kg regional commodity reference prices. Audited and excluded from price ingestion."
+    },
+    {
+      "source_name": "Satu Data Indonesia",
+      "source_url": "https://data.go.id/",
+      "license": "PUBLIC_CATALOG_PORTAL",
+      "license_verified": false,
+      "dataset_type": "official_reference",
+      "retrieved_at": "2026-11-20T06:53:38Z",
+      "checksum": null,
+      "allowed_use": "MANUAL_AUTHORIZED_CSV_IMPORT_ONLY",
+      "transformation_notes": "Next.js portal HTTP 200; legacy CKAN v3 search endpoint returned HTTP 404. Supported through authorized CSV import workflow."
+    }
+  ]
+}

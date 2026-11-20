@@ -1,0 +1,244 @@
+{
+  "source": {
+    "name": "FoodSeg103, official test split, curated pilot subset",
+    "citation": "Wu et al., A Large-Scale Benchmark for Food Image Segmentation, ACM MM 2021",
+    "original": "https://github.com/LARC-CMU-SMU/FoodSeg103-Benchmark-v1",
+    "mirror": "https://huggingface.co/datasets/justinsiow/FoodSeg103",
+    "notes": "Human pixel-level ingredient labels from original test masks; manually mapped to four meal slots via mask and visual review. Excluded from project prompt tuning. Public research imagery, not an Indonesian kitchen validation set."
+  },
+  "cases": [
+    {
+      "id": "00004458",
+      "image": "photos/00004458.jpg",
+      "human_mask": "masks/00004458.png",
+      "photo_sha256": "49471917c8ff08b395886c519117aaeb55336c6868be27b3d5746094622f2b9b",
+      "mask_ingredient_labels": [
+        "broccoli",
+        "carrot",
+        "cucumber",
+        "lemon",
+        "rice"
+      ],
+      "labels": {
+        "staple": "visible",
+        "protein": "uncertain",
+        "vegetable": "visible",
+        "fruit": "visible"
+      }
+    },
+    {
+      "id": "00004505",
+      "image": "photos/00004505.jpg",
+      "human_mask": "masks/00004505.png",
+      "photo_sha256": "fe3df263ad4e7e640a4937c7be0a424963061032e12b11ae59b3e134dfd41e4d",
+      "mask_ingredient_labels": [
+        "broccoli",
+        "chicken duck",
+        "french fries",
+        "shiitake"
+      ],
+      "labels": {
+        "staple": "visible",
+        "protein": "visible",
+        "vegetable": "visible",
+        "fruit": "not_visible"
+      }
+    },
+    {
+      "id": "00004672",
+      "image": "photos/00004672.jpg",
+      "human_mask": "masks/00004672.png",
+      "photo_sha256": "14e856d113c681008dc8ca8400dabc361ea8594a302239c9fe066500d618a33c",
+      "mask_ingredient_labels": [
+        "bread",
+        "cilantro mint",
+        "steak",
+        "tomato"
+      ],
+      "labels": {
+        "staple": "visible",
+        "protein": "visible",
+        "vegetable": "visible",
+        "fruit": "not_visible"
+      }
+    },
+    {
+      "id": "00004706",
+      "image": "photos/00004706.jpg",
+      "human_mask": "masks/00004706.png",
+      "photo_sha256": "0e6179cbf2f98a705a641dd9400f0dbacfb0b3850b8dac6cf6bee99b227c065d",
+      "mask_ingredient_labels": [
+        "lamb",
+        "sauce"
+      ],
+      "labels": {
+        "staple": "not_visible",
+        "protein": "visible",
+        "vegetable": "not_visible",
+        "fruit": "not_visible"
+      }
+    },
+    {
+      "id": "00004909",
+      "image": "photos/00004909.jpg",
+      "human_mask": "masks/00004909.png",
+      "photo_sha256": "53ba4acadae205600dc031db7b3efaf6b3fdb103cae6c3678d11fc603d068b6e",
+      "mask_ingredient_labels": [
+        "asparagus",
+        "chicken duck",
+        "potato"
+      ],
+      "labels": {
+        "staple": "visible",
+        "protein": "visible",
+        "vegetable": "visible",
+        "fruit": "not_visible"
+      }
+    },
+    {
+      "id": "00005196",
+      "image": "photos/00005196.jpg",
+      "human_mask": "masks/00005196.png",
+      "photo_sha256": "0b741f1b40f7686e250d22738e2a3f20f1b93db094d0b51768aa0bb45b9cd6c7",
+      "mask_ingredient_labels": [
+        "carrot",
+        "chicken duck",
+        "rice"
+      ],
+      "labels": {
+        "staple": "visible",
+        "protein": "visible",
+        "vegetable": "visible",
+        "fruit": "not_visible"
+      }
+    },
+    {
+      "id": "00005430",
+      "image": "photos/00005430.jpg",
+      "human_mask": "masks/00005430.png",
+      "photo_sha256": "87226dfa9d3f216a093a9b2478a838b81ac449da252dc981a22f286bcf280720",
+      "mask_ingredient_labels": [
+        "chicken duck",
+        "cilantro mint",
+        "lemon",
+        "potato",
+        "rice",
+        "sauce"
+      ],
+      "labels": {
+        "staple": "visible",
+        "protein": "visible",
+        "vegetable": "uncertain",
+        "fruit": "visible"
+      }
+    },
+    {
+      "id": "00005593",
+      "image": "photos/00005593.jpg",
+      "human_mask": "masks/00005593.png",
+      "photo_sha256": "de965d109dd286a0aba4b77476ecf61ed728cbefd03014b3589a1b2634ff5b55",
+      "mask_ingredient_labels": [
+        "asparagus",
+        "bread",
+        "fish",
+        "lemon",
+        "sauce"
+      ],
+      "labels": {
+        "staple": "uncertain",
+        "protein": "visible",
+        "vegetable": "visible",
+        "fruit": "visible"
+      }
+    },
+    {
+      "id": "00006059",
+      "image": "photos/00006059.jpg",
+      "human_mask": "masks/00006059.png",
+      "photo_sha256": "db080d1db380ca5219db58baa0f396fc246f34a969a2c1392b205953798b30b3",
+      "mask_ingredient_labels": [
+        "carrot",
+        "cauliflower",
+        "celery stick",
+        "sauce"
+      ],
+      "labels": {
+        "staple": "not_visible",
+        "protein": "not_visible",
+        "vegetable": "visible",
+        "fruit": "not_visible"
+      }
+    },
+    {
+      "id": "00006139",
+      "image": "photos/00006139.jpg",
+      "human_mask": "masks/00006139.png",
+      "photo_sha256": "1f98916b0dd797543be82e8fa30bf5b1d0976650528c96471e26883f86eba156",
+      "mask_ingredient_labels": [
+        "blueberry",
+        "ice cream",
+        "raspberry",
+        "strawberry"
+      ],
+      "labels": {
+        "staple": "not_visible",
+        "protein": "not_visible",
+        "vegetable": "not_visible",
+        "fruit": "visible"
+      }
+    },
+    {
+      "id": "00006887",
+      "image": "photos/00006887.jpg",
+      "human_mask": "masks/00006887.png",
+      "photo_sha256": "4993f9e464231ca1e3761201cc5bb7f809a0919fce7672fe75bcc2783f632f1c",
+      "mask_ingredient_labels": [
+        "broccoli",
+        "cucumber",
+        "tofu"
+      ],
+      "labels": {
+        "staple": "not_visible",
+        "protein": "visible",
+        "vegetable": "visible",
+        "fruit": "not_visible"
+      }
+    },
+    {
+      "id": "00006893",
+      "image": "photos/00006893.jpg",
+      "human_mask": "masks/00006893.png",
+      "photo_sha256": "5c3539b32b957ddc26a1faf1edfd028f4b1461d9293c5d93eb742f07d0f4b296",
+      "mask_ingredient_labels": [
+        "chicken duck",
+        "snow peas",
+        "spring onion",
+        "tofu"
+      ],
+      "labels": {
+        "staple": "not_visible",
+        "protein": "visible",
+        "vegetable": "visible",
+        "fruit": "not_visible"
+      }
+    },
+    {
+      "id": "00007018",
+      "image": "photos/00007018.jpg",
+      "human_mask": "masks/00007018.png",
+      "photo_sha256": "f3fbd599739239b2037f67bfa308070839c15396dfee28a016bc9c5bc3be8655",
+      "mask_ingredient_labels": [
+        "cucumber",
+        "egg",
+        "pepper",
+        "white button mushroom"
+      ],
+      "labels": {
+        "staple": "not_visible",
+        "protein": "visible",
+        "vegetable": "visible",
+        "fruit": "not_visible"
+      }
+    }
+  ]
+}

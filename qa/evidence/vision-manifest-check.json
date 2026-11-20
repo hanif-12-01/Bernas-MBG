@@ -1,0 +1,18 @@
+{
+  "cases": 13,
+  "label_counts": {
+    "fruit:not_visible": 9,
+    "fruit:visible": 4,
+    "protein:not_visible": 2,
+    "protein:uncertain": 1,
+    "protein:visible": 10,
+    "staple:not_visible": 6,
+    "staple:uncertain": 1,
+    "staple:visible": 6,
+    "vegetable:not_visible": 2,
+    "vegetable:uncertain": 1,
+    "vegetable:visible": 10
+  },
+  "status": "validated_only",
+  "performed_live_requests": false
+}

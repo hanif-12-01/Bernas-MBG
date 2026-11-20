@@ -1,0 +1,5 @@
+event_type,ingredient_code,lot_code,quantity,unit,claimed_unit,expected_quantity,expires_at,expiry_known,event_at,idempotency_key,source_document_ref,supplier_name,delivery_status,density_g_per_ml,unit_weight_g,counted_by,notes
+OPENING_BALANCE,ING001,LOT-ING001-01,45,kg,,,2027-06-30T23:59:59Z,true,2026-11-20T06:00:00Z,OP-ING001-20261120,DOC-OP-001,,,,,Kepala Gudang,Contoh saldo awal beras (ganti dengan catatan dapur nyata yang terotorisasi)
+GOODS_RECEIPT,ING007,LOT-ING007-01,20,kg,,,2026-11-25T23:59:59Z,true,2026-11-20T06:30:00Z,GR-ING007-20261120,SJ-AYAM-001,Pemasok Contoh,RECEIVED,,,,Penerimaan batch ayam terverifikasi
+DAMAGE,ING007,LOT-ING007-01,3,kg,,,,,2026-11-20T07:00:00Z,DMG-ING007-20261120,QC-DMG-001,,,,,,Bagian rusak atau mencair tidak dapat dipakai
+RESERVATION,ING007,LOT-ING007-01,5,kg,,,,,2026-11-20T07:15:00Z,RES-ING007-20261120,MENU-APPROVED-001,,,,,,Dialokasikan untuk jadwal produksi lain
