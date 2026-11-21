@@ -1,6 +1,6 @@
 <div align="center">
 
-# GiziOptima (Bernas-MBG)
+# GiziOptima 
 
 ### Adaptive Kitchen Operations, Safety Hold & Procurement Recovery Engine
 
