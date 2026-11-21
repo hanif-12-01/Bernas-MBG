@@ -108,7 +108,7 @@ function WorkspaceStateProvider({ children }: { children: React.ReactNode }) {
 
   // Auto-select latest validated run (or latest run) when selection is empty or stale
   useEffect(() => {
-    if (!isAuthenticated || !runsQuery.isSuccess) return;
+    if (!isAuthenticated || !runsQuery.isSuccess || runsQuery.isFetching) return;
     if (runs.length === 0) {
       if (selectedRunId !== null) setSelectedRunId(null);
       return;
@@ -118,7 +118,7 @@ function WorkspaceStateProvider({ children }: { children: React.ReactNode }) {
       const preferred = runs.find((r) => r.validation_passed) ?? runs[0];
       setSelectedRunId(preferred.run_id);
     }
-  }, [isAuthenticated, runs, runsQuery.isSuccess, selectedRunId]);
+  }, [isAuthenticated, runs, runsQuery.isFetching, runsQuery.isSuccess, selectedRunId]);
 
   const selectedRunQuery = useQuery({
     queryKey: ["run", kitchenScopeKey, selectedRunId],

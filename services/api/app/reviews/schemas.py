@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -72,6 +72,13 @@ class MenuReviewResponse(BaseModel):
     operational_status: Optional[str] = None
     operational_assignment_id: Optional[UUID] = None
     production_scope_label: Optional[str] = None
+    service_dates: List[date] = Field(default_factory=list)
+    period_start_date: Optional[date] = None
+    period_end_date: Optional[date] = None
+    derived_period_phase: Optional[str] = None
+    continuation_of_run_id: Optional[UUID] = None
+    stock_confirmation_required: bool = False
+    stock_confirmation_reason: Optional[str] = None
     hold_incident_id: Optional[UUID] = None
     hold_reason: Optional[str] = None
     approval_scope_notice: str = (

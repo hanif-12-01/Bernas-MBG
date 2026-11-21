@@ -9,6 +9,7 @@ import { NumericInput } from "@/components/ui/NumericInput";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { parseNumericInput } from "@/lib/formatters/numericInput";
 import { formatDateTimeID } from "@/lib/formatters/indonesian";
+import { getJakartaTodayISO } from "@/lib/formatters/jakartaDate";
 
 const numberFields = [
   { key: "servings_per_day", label: "Porsi per hari", mode: "integer", min: 1, max: 10000 },
@@ -36,6 +37,7 @@ export function ScenarioPlanningForm({ initialDatasetId = "", expanded = false }
   const resultsLink = useRef<HTMLAnchorElement>(null);
   const [name, setName] = useState("");
   const [datasetId, setDatasetId] = useState(initialDatasetId);
+  const [startDate, setStartDate] = useState(() => getJakartaTodayISO());
   const [numbers, setNumbers] = useState(initialNumbers);
   const [attempted, setAttempted] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -72,6 +74,7 @@ export function ScenarioPlanningForm({ initialDatasetId = "", expanded = false }
         days,
         budget_idr_per_serving: budget,
         max_repeat_per_family: repeat,
+        production_date: startDate ? `${startDate}T08:00:00Z` : undefined,
       });
       setName("");
       setAttempted(false);
@@ -144,6 +147,18 @@ export function ScenarioPlanningForm({ initialDatasetId = "", expanded = false }
                     className="mt-1 min-h-[44px] w-full text-base sm:text-sm" />
                 </div>
               ))}
+              <div className="min-w-0">
+                <label htmlFor={`${id}-start-date`} className="block text-sm font-semibold">
+                  Tanggal mulai pelayanan
+                </label>
+                <input
+                  id={`${id}-start-date`}
+                  type="date"
+                  value={startDate}
+                  onChange={(event) => setStartDate(event.target.value)}
+                  className="mt-1 min-h-[44px] w-full rounded-xl border border-[#DCE6DE] bg-white px-3 text-base sm:text-sm"
+                />
+              </div>
             </fieldset>
             <p className="text-xs leading-relaxed text-[#647A87]">
               Perhitungan memakai dataset terpilih dan target gizi simulasi.{" "}

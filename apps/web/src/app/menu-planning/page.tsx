@@ -16,6 +16,7 @@ import { EmptyState, ErrorState, LoadingSkeleton } from "@/components/feedback/F
 import { PageHeader } from "@/components/layout/AppShell";
 import { MenuDayCard } from "@/components/menu/MenuDayCard";
 import { MenuReviewActionBar } from "@/components/menu/MenuReviewActionBar";
+import { NextWeekPlannerCard } from "@/components/menu/NextWeekPlannerCard";
 import { ScenarioPlanningForm } from "@/components/menu/ScenarioPlanningForm";
 import { DatasetSimulationNotice } from "@/components/ui/DatasetSimulationNotice";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -128,6 +129,7 @@ function MenuPlanningContent() {
           subtitle="Tinjau susunan resep terverifikasi, komposisi bahan, biaya harian, dan kesesuaian terhadap target gizi simulasi."
         />
         {planForm}
+        <NextWeekPlannerCard selectedRun={selectedRun} />
         <div id="hasil-rencana" className="scroll-mt-20">
           {isLoadingRun ? <LoadingSkeleton rows={2} /> : selectedRun ? (
             <ErrorState
@@ -189,6 +191,7 @@ function MenuPlanningContent() {
       />
 
       {planForm}
+      <NextWeekPlannerCard selectedRun={selectedRun} />
       <div id="hasil-rencana" className="scroll-mt-20">
       <DatasetSimulationNotice simulationOnly={selectedRun.simulation_only} />
       </div>
@@ -229,7 +232,7 @@ function MenuPlanningContent() {
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#EEF3EE] pb-4">
             <div>
               <h2 className="text-lg font-bold text-[#16354A]">
-                Menu {formatDayLabel(activeDay.day_index)} — {mealTypeLabel}
+                Menu {formatDayLabel(activeDay.day_index, activeDay.service_date)} — {mealTypeLabel}
               </h2>
               <p className="mt-0.5 text-xs text-[#647A87]">
                 Klik resep untuk melihat komposisi bahan mentah per porsi dan faktor retensi memasak.

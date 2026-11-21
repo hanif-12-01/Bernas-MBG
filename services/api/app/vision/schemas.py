@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import List, Optional
 from uuid import UUID
@@ -88,6 +88,7 @@ class QCInspectionCreateRequest(BaseModel):
     menu_review_id: Optional[UUID] = None
     previous_inspection_id: Optional[UUID] = None
     day_index: int = Field(ge=1, le=14)
+    service_date: Optional[date] = None
     meal_batch_code: Optional[str] = Field(default=None, max_length=64)
     qc_notes: Optional[str] = Field(default=None, max_length=2000)
 
@@ -163,6 +164,7 @@ class QCInspectionResponse(BaseModel):
     run_id: UUID
     scenario_name: str
     day_index: int
+    service_date: Optional[date] = None
     status: QCInspectionStatusEnum
     review_outcome: Optional[QCReviewOutcomeEnum] = None
     plan_operational_status: Optional[str] = None

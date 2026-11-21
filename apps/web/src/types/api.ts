@@ -286,6 +286,9 @@ export interface Scenario {
   price_overrides_idr_per_g: Record<string, number>;
   stock_overrides_raw_g: Record<string, number>;
   source_label: SourceTypeEnum;
+  production_date?: string | null;
+  service_dates?: string[];
+  continuation_of_run_id?: string | null;
   locked: boolean;
   created_at: string;
 }
@@ -301,6 +304,9 @@ export interface ScenarioCreateRequest {
   max_repeat_per_family?: number;
   excluded_allergens?: string[];
   source_label?: SourceTypeEnum;
+  production_date?: string | null;
+  service_dates?: string[];
+  continuation_of_run_id?: string | null;
 }
 
 export interface PriceOverrideEntry {
@@ -317,10 +323,92 @@ export interface StockOverrideEntry {
 
 export interface DayPlan {
   day_index: number;
+  service_date?: string | null;
   recipes_by_slot: Record<SlotEnum, string>;
   recipe_names_by_slot: Record<SlotEnum, string>;
   daily_cost_idr_per_serving: number;
   nutrients_per_serving: Record<string, number>;
+}
+
+export interface CrossWeekHistoryDaySummary {
+  service_date: string;
+  source_type: "VERIFIED_EXECUTION" | "OPERATIONAL_PLAN" | string;
+  plan_title: string;
+  recipe_names_by_slot: Record<string, string>;
+  families_by_slot: Record<string, string>;
+}
+
+export interface CrossWeekComparisonMetrics {
+  previous_unique_recipes_count: number;
+  new_unique_recipes_count: number;
+  fresh_recipes_count: number;
+  repeated_recipes_from_previous_week_count: number;
+  boundary_day5_to_day1_repeat_count: number;
+  max_boundary_5day_family_repeat: number;
+  previous_cost_per_serving_idr: number | null;
+  new_cost_per_serving_idr: number | null;
+  cost_delta_per_serving_idr: number | null;
+}
+
+export interface CrossWeekHistoryContext {
+  window_days: number;
+  history_days_count: number;
+  primary_source_type: "VERIFIED_EXECUTION" | "MIXED" | "OPERATIONAL_PLAN" | "NONE" | string;
+  source_notice: string;
+  previous_run_id: string | null;
+  previous_plan_title: string | null;
+  previous_cost_per_serving_idr: number | null;
+  previous_period_dates: string[];
+  history_days: CrossWeekHistoryDaySummary[];
+  comparison?: CrossWeekComparisonMetrics | null;
+}
+
+export interface NextWeekDefaultsResponse {
+  source_run_id: string | null;
+  source_assignment_id: string | null;
+  source_plan_title: string | null;
+  source_service_dates: string[];
+  suggested_name: string;
+  suggested_service_dates: string[];
+  dataset_version_id: string;
+  nutrition_target_id: string;
+  meal_type: string;
+  servings_per_day: number;
+  days: number;
+  budget_idr_per_serving: number;
+  max_repeat_per_family: number;
+  excluded_allergens: string[];
+  history_source_type: string;
+  history_source_notice: string;
+  stock_confirmation_required: boolean;
+  stock_confirmation_reason: string | null;
+}
+
+export interface PrepareNextWeekRequest {
+  source_run_id?: string | null;
+  source_assignment_id?: string | null;
+  name?: string | null;
+  dataset_version_id?: string | null;
+  service_dates?: string[] | null;
+  servings_per_day?: number | null;
+  budget_idr_per_serving?: number | null;
+  max_repeat_per_family?: number | null;
+  excluded_allergens?: string[] | null;
+  planner_notes?: string | null;
+}
+
+export interface PrepareNextWeekResponse {
+  scenario_id: string;
+  run_id: string;
+  menu_review_id: string | null;
+  menu_review_status: string | null;
+  service_dates: string[];
+  solver_status: string;
+  validation_passed: boolean;
+  stock_confirmation_required: boolean;
+  stock_confirmation_reason: string | null;
+  history_context: CrossWeekHistoryContext | Record<string, unknown>;
+  warnings: string[];
 }
 
 export interface ConstraintViolation {
@@ -390,6 +478,7 @@ export interface OptimizationRunResponse {
   objective_total_idr: number | null;
   cost_per_serving_average_idr: number | null;
   days_count?: number | null;
+  service_dates?: string[];
   servings_per_day?: number | null;
   total_servings?: number | null;
   total_menu_slots?: number | null;
@@ -404,6 +493,9 @@ export interface OptimizationRunResponse {
   input_sha256: string;
   model_version: string;
   input_snapshot: InputSnapshot;
+  stock_confirmation_required?: boolean;
+  stock_confirmation_reason?: string | null;
+  history_context?: CrossWeekHistoryContext | null;
   days: DayPlan[];
   material_usage: MaterialUsage[];
   constraint_audit: ConstraintAudit;
@@ -642,6 +734,13 @@ export interface MenuReviewResponse {
   operational_status?: string | null;
   operational_assignment_id?: string | null;
   production_scope_label?: string | null;
+  service_dates?: string[];
+  period_start_date?: string | null;
+  period_end_date?: string | null;
+  derived_period_phase?: "IN_PROGRESS" | "UPCOMING" | "COMPLETED" | string | null;
+  continuation_of_run_id?: string | null;
+  stock_confirmation_required?: boolean;
+  stock_confirmation_reason?: string | null;
   hold_incident_id?: string | null;
   hold_reason?: string | null;
   approval_scope_notice: string;
@@ -749,6 +848,7 @@ export interface QCInspectionResponse {
   run_id: string;
   scenario_name: string;
   day_index: number;
+  service_date?: string | null;
   status: QCInspectionStatusEnum;
   review_outcome: QCReviewOutcomeEnum | null;
   plan_operational_status?: string | null;
@@ -1083,6 +1183,10 @@ export interface OperationalPlanAssignmentResponse {
   operational_status: OperationalPlanStatusEnum;
   production_date: string;
   horizon_days: number;
+  service_dates?: string[];
+  period_start_date?: string | null;
+  period_end_date?: string | null;
+  derived_period_phase?: "IN_PROGRESS" | "UPCOMING" | "COMPLETED" | string | null;
   meal_type: string;
   target_cohort: string;
   batch_label: string;
@@ -1113,6 +1217,8 @@ export interface EffectiveOperationalPlanResponse {
   state: OperationalPlanStateEnum;
   is_ready_for_execution: boolean;
   status_message: string;
+  queried_service_date?: string | null;
+  matched_day_index?: number | null;
   active_plan: OperationalPlanAssignmentResponse | null;
   held_plan: OperationalPlanAssignmentResponse | null;
   approved_pending_activation: string[];

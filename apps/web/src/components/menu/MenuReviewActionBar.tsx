@@ -14,7 +14,9 @@ import {
   formatDateTimeID,
   formatMenuReviewStatus,
   formatOperationalStatus,
+  formatPeriodPhase,
 } from "@/lib/formatters/indonesian";
+import { formatJakartaDate } from "@/lib/formatters/jakartaDate";
 import type { MenuReviewDecisionEnum } from "@/types/api";
 
 interface MenuReviewActionBarProps {
@@ -165,7 +167,29 @@ export function MenuReviewActionBar({
               <StatusBadge tone="neutral" label="Belum Diajukan" />
             )}
             {opStatusInfo && <StatusBadge tone={opStatusInfo.tone} label={opStatusInfo.label} />}
+            {latestReview?.derived_period_phase &&
+              formatPeriodPhase(latestReview.derived_period_phase) && (
+                <StatusBadge
+                  tone={formatPeriodPhase(latestReview.derived_period_phase)!.tone}
+                  label={formatPeriodPhase(latestReview.derived_period_phase)!.label}
+                />
+              )}
           </div>
+          {latestReview?.period_start_date && (
+            <p className="text-xs font-medium text-[#4A6170]">
+              Periode pelayanan: {formatJakartaDate(latestReview.period_start_date)}
+              {latestReview.period_end_date &&
+              latestReview.period_end_date !== latestReview.period_start_date
+                ? ` s.d. ${formatJakartaDate(latestReview.period_end_date)}`
+                : ""}{" "}
+              ({latestReview.service_dates?.length || latestReview.days_count} hari)
+            </p>
+          )}
+          {latestReview?.stock_confirmation_required && latestReview.stock_confirmation_reason && (
+            <p className="rounded-lg border border-[#F3D19B] bg-[#FFFBEB] px-3 py-2 text-xs font-medium text-[#92400E]">
+              <strong>Perlu Konfirmasi Stok:</strong> {latestReview.stock_confirmation_reason}
+            </p>
+          )}
           {latestReview?.hold_reason && latestReview.operational_status === "ON_HOLD" && (
             <p className="rounded-lg border border-[#F5C2C2] bg-[#FEF0F0] px-3 py-2 text-xs font-semibold text-[#991B1B]">
               DITAHAN (ON HOLD): {latestReview.hold_reason}
@@ -174,7 +198,9 @@ export function MenuReviewActionBar({
           {canManagerActivate && latestReview && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#F3D19B] bg-[#FFFBEB] p-3">
               <p className="text-xs font-medium text-[#92400E]">
-                Rencana pengganti ini sudah disetujui Kepala Dapur tetapi belum menggantikan rencana aktif saat ini.
+                {latestReview.recovery_event_id
+                  ? "Rencana pengganti ini sudah disetujui Kepala Dapur tetapi belum menggantikan rencana aktif saat ini."
+                  : "Rencana ini sudah disetujui Kepala Dapur tetapi belum diaktifkan. Backend akan memeriksa kembali stok dan tanggal saat aktivasi."}
               </p>
               <button
                 type="button"
@@ -183,7 +209,11 @@ export function MenuReviewActionBar({
                 className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl bg-[#0F766E] px-4 py-2 text-xs font-bold text-white hover:bg-[#0B5F58] disabled:opacity-60"
               >
                 <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-                <span>Aktifkan Rencana Pengganti</span>
+                <span>
+                  {latestReview.recovery_event_id
+                    ? "Aktifkan Rencana Pengganti"
+                    : "Aktifkan Rencana"}
+                </span>
               </button>
             </div>
           )}

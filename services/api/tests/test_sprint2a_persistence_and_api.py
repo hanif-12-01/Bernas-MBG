@@ -146,6 +146,7 @@ def test_alembic_migration_upgrade_downgrade_roundtrip(tmp_path: Path) -> None:
         "purchase_documents",
         "purchase_document_lines",
         "goods_receipt_records",
+        "operational_plan_service_dates",
     }
     assert expected_tables.issubset(tables)
     eng.dispose()
@@ -160,6 +161,7 @@ def test_alembic_migration_upgrade_downgrade_roundtrip(tmp_path: Path) -> None:
     assert "kitchen_stock_custodian_assignments" not in tables_after_down
     assert "purchase_documents" not in tables_after_down
     assert "goods_receipt_records" not in tables_after_down
+    assert "operational_plan_service_dates" not in tables_after_down
     eng2.dispose()
 
     command.upgrade(cfg, "head")

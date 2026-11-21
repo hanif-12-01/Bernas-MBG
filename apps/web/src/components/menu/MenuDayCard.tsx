@@ -44,11 +44,13 @@ export function MenuDayCard({
       <div>
         <div className="flex items-start justify-between gap-2 border-b border-[#EEF3EE] pb-3">
           <div>
-            <p className="text-sm font-bold text-[#16354A]">{formatDayLabel(day.day_index)}</p>
+            <p className="text-sm font-bold text-[#16354A]">
+              {formatDayLabel(day.day_index, day.service_date)}
+            </p>
             <p className="mt-0.5 text-xs text-[#647A87]">4 Komponen Menu</p>
           </div>
           <span
-            className={`rounded-lg px-2 py-1 text-xs font-bold tabular-nums ${
+            className={`shrink-0 whitespace-nowrap rounded-lg px-2 py-1 text-xs font-bold tabular-nums ${
               withinBudget
                 ? "bg-[#EBF6F5] text-[#0F766E]"
                 : "bg-[#FEF0F0] text-[#991B1B]"

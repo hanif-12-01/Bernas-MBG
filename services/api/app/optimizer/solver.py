@@ -3,18 +3,22 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from uuid import UUID
 
 import pulp
 from pulp.constants import LpSolveStatus
 
 from app.domain.models.schemas import (
+    Ingredient,
+    NutritionTargetProfile,
     RecipeFeatures,
+    RecipeVariant,
+    Scenario,
     SlotEnum,
     SolverStatusEnum,
 )
-from app.optimizer.model_builder import BuiltMILPModel
+from app.optimizer.model_builder import BuiltMILPModel, build_recipe_milp
 
 INTEGRALITY_TOLERANCE = 1e-6
 OPTIMALITY_GAP_ABS_TOL = 1e-6
@@ -291,3 +295,145 @@ def solve_built_model(
         solver_version=solver_version,
         raw_solver_status=raw_status_label,
     )
+
+
+def _attach_cross_week_boundary_penalty(
+    built: BuiltMILPModel,
+    scenario: Scenario,
+    history_days: Sequence[Any],
+    window_days: int = 5,
+) -> pulp.LpAffineExpression:
+    """Attach soft slack constraints for 5-day cross-week sliding-window family repeat
+    and boundary recipe repeat, returning the weighted penalty expression on NEW decisions only.
+
+    History is treated as immutable fact: because every boundary constraint includes a
+    non-negative slack variable, history can NEVER make a feasible new week INFEASIBLE.
+    """
+    hist = list(history_days)[-window_days:]
+    if not hist:
+        return pulp.lpSum([])
+
+    prob = built.problem
+    x = built.x_vars
+    eligible = built.eligible_features
+    days = built.days
+    hist_len = len(hist)
+
+    families: Dict[str, List[UUID]] = {}
+    for rid, feat in eligible.items():
+        families.setdefault(feat.family, []).append(rid)
+
+    penalty_terms: List[Any] = []
+
+    # 1. Sliding 5-day family repeat window spanning history suffix + new week prefix
+    max_k = min(window_days - 1, len(days))
+    for k in range(1, max_k + 1):
+        hist_take = window_days - k
+        hist_suffix = hist[max(0, hist_len - hist_take) :]
+        if not hist_suffix:
+            continue
+        hist_fam_counts: Dict[str, int] = {}
+        for hd in hist_suffix:
+            for fam in hd.families_by_slot.values():
+                hist_fam_counts[fam] = hist_fam_counts.get(fam, 0) + 1
+
+        for family, rids in sorted(families.items()):
+            h_cnt = hist_fam_counts.get(family, 0)
+            if h_cnt <= 0:
+                continue
+            allowed_new = max(0, scenario.max_repeat_per_family - h_cnt)
+            slack = prob.add_variable(
+                f"slack_cw_k{k}_{family[:20]}_{len(penalty_terms)}",
+                lowBound=0.0,
+                cat="Continuous",
+            )
+            prob += (
+                pulp.lpSum(x[(d, rid)] for d in days[:k] for rid in rids) - slack
+                <= allowed_new,
+                f"cw_fam_win_k{k}_{family[:20]}_{len(penalty_terms)}",
+            )
+            penalty_terms.append(5.0 * slack)
+
+    # 2. Boundary exact recipe repetition penalty (Day 5 -> Day 1 strongest, plus recent 5-day context)
+    last_day_codes = set(hist[-1].recipe_codes_by_slot.values())
+    recent_2_codes = {
+        code for hd in hist[-2:] for code in hd.recipe_codes_by_slot.values()
+    }
+    recent_all_codes = {
+        code for hd in hist for code in hd.recipe_codes_by_slot.values()
+    }
+
+    if 1 in days:
+        for rid, feat in eligible.items():
+            if feat.recipe_code in last_day_codes:
+                penalty_terms.append(10.0 * x[(1, rid)])
+            elif feat.recipe_code in recent_2_codes:
+                penalty_terms.append(6.0 * x[(1, rid)])
+            elif feat.recipe_code in recent_all_codes:
+                penalty_terms.append(2.0 * x[(1, rid)])
+
+    if 2 in days:
+        for rid, feat in eligible.items():
+            if feat.recipe_code in last_day_codes:
+                penalty_terms.append(4.0 * x[(2, rid)])
+            elif feat.recipe_code in recent_all_codes:
+                penalty_terms.append(1.0 * x[(2, rid)])
+
+    return pulp.lpSum(penalty_terms)
+
+
+def solve_with_cross_week_history(
+    scenario: Scenario,
+    recipes: List[RecipeVariant],
+    features_by_id: Dict[UUID, RecipeFeatures],
+    target: NutritionTargetProfile,
+    stock_raw_g: Dict[str, float],
+    history_days: Sequence[Any],
+    *,
+    ingredients_by_code: Optional[Dict[str, Ingredient]] = None,
+    usable_stock_by_day: Optional[Dict[int, Dict[str, float]]] = None,
+    time_limit_seconds: float = 10.0,
+    window_days: int = 5,
+) -> Tuple[RawSolveResult, Optional[float]]:
+    """Lexicographic 2-stage MILP solver for cross-week menu planning:
+    Stage 1: Minimize cross-week boundary repetition penalty (soft slack >= 0) subject to ALL hard constraints.
+    Stage 2: Minimize total procurement cost subject to boundary penalty <= S_min + 1e-6.
+    """
+    built1 = build_recipe_milp(
+        scenario=scenario,
+        recipes=recipes,
+        features_by_id=features_by_id,
+        target=target,
+        stock_raw_g=stock_raw_g,
+        ingredients_by_code=ingredients_by_code,
+        usable_stock_by_day=usable_stock_by_day,
+    )
+    if not history_days:
+        return solve_built_model(built1, time_limit_seconds=time_limit_seconds), 0.0
+
+    half_limit = max(2.0, time_limit_seconds * 0.5)
+    penalty1 = _attach_cross_week_boundary_penalty(built1, scenario, history_days, window_days=window_days)
+    built1.problem.setObjective(penalty1)
+    stage1 = solve_built_model(built1, time_limit_seconds=half_limit)
+    if (
+        stage1.solver_status in {SolverStatusEnum.INFEASIBLE, SolverStatusEnum.ERROR}
+        or not stage1.has_incumbent
+    ):
+        return stage1, None
+
+    s_min = float(stage1.reported_objective or 0.0)
+
+    built2 = build_recipe_milp(
+        scenario=scenario,
+        recipes=recipes,
+        features_by_id=features_by_id,
+        target=target,
+        stock_raw_g=stock_raw_g,
+        ingredients_by_code=ingredients_by_code,
+        usable_stock_by_day=usable_stock_by_day,
+    )
+    penalty2 = _attach_cross_week_boundary_penalty(built2, scenario, history_days, window_days=window_days)
+    built2.problem += penalty2 <= s_min + 1e-6, "cw_lexicographic_penalty_bound"
+    stage2 = solve_built_model(built2, time_limit_seconds=half_limit)
+    stage2.solver_seconds = round(stage1.solver_seconds + stage2.solver_seconds, 4)
+    return stage2, round(s_min, 4)

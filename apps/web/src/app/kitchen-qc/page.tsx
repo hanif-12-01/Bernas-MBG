@@ -34,6 +34,7 @@ import {
   formatQCStatus,
   formatSlotLabel,
 } from "@/lib/formatters/indonesian";
+import { formatJakartaDate, getJakartaTodayISO } from "@/lib/formatters/jakartaDate";
 import type {
   ComparisonStatusEnum,
   HumanCorrectedComponent,
@@ -71,6 +72,7 @@ function KitchenQCContent() {
   );
   const [newReviewId, setNewReviewId] = useState<string>(initialReviewParam ?? "");
   const [newDayIndex, setNewDayIndex] = useState<number>(1);
+  const [lookupServiceDate, setLookupServiceDate] = useState<string>(() => getJakartaTodayISO());
   const [newBatchCode, setNewBatchCode] = useState<string>("");
   const [previousInspection, setPreviousInspection] = useState<QCInspectionResponse | null>(null);
 
@@ -102,6 +104,45 @@ function KitchenQCContent() {
     queryFn: () => apiClient.listMenuReviews(),
     enabled: isQC,
   });
+
+  const effectiveByDateQuery = useQuery({
+    queryKey: ["operational-plan-effective", kitchenId, lookupServiceDate],
+    queryFn: () => apiClient.getEffectiveOperationalPlan({ serviceDate: lookupServiceDate }),
+    enabled: Boolean(isQC && lookupServiceDate && !previousInspection),
+  });
+
+  const matchedDatePlan = effectiveByDateQuery.data?.active_plan ?? null;
+  const matchedDateDayIndex = effectiveByDateQuery.data?.matched_day_index ?? null;
+  const matchedDatasetOrPlanKey = matchedDatePlan
+    ? `${lookupServiceDate}|${matchedDatePlan.menu_review_id}|${matchedDateDayIndex ?? ""}`
+    : "";
+  const [lastSyncedDateKey, setLastSyncedDateKey] = useState<string>("");
+
+  useEffect(() => {
+    if (
+      !matchedDatePlan ||
+      !matchedDatasetOrPlanKey ||
+      matchedDatasetOrPlanKey === lastSyncedDateKey ||
+      previousInspection ||
+      initialRunParam ||
+      initialReviewParam
+    ) {
+      return;
+    }
+    setNewReviewId(matchedDatePlan.menu_review_id);
+    if (matchedDateDayIndex && matchedDateDayIndex >= 1) {
+      setNewDayIndex(matchedDateDayIndex);
+    }
+    setLastSyncedDateKey(matchedDatasetOrPlanKey);
+  }, [
+    initialReviewParam,
+    initialRunParam,
+    lastSyncedDateKey,
+    matchedDatasetOrPlanKey,
+    matchedDateDayIndex,
+    matchedDatePlan,
+    previousInspection,
+  ]);
 
   const approvedPlans = useMemo(() => {
     const filtered = (menuReviewsQuery.data ?? []).filter(
@@ -232,10 +273,19 @@ function KitchenQCContent() {
   const createMutation = useMutation({
     mutationFn: () => {
       if (!newRunId || !effectiveDay) throw new Error("Pilih rencana menu dan hari.");
+      const selectedDayObj = planDays.find((d) => d.day_index === effectiveDay);
+      const matchedServiceDate =
+        selectedDayObj?.service_date ??
+        (matchedDatePlan &&
+        matchedDatePlan.menu_review_id === newReviewId &&
+        matchedDateDayIndex === effectiveDay
+          ? lookupServiceDate
+          : undefined);
       return apiClient.createQCInspection({
         run_id: newRunId,
         menu_review_id: newReviewId,
         day_index: effectiveDay,
+        ...(matchedServiceDate ? { service_date: matchedServiceDate } : {}),
         meal_batch_code: newBatchCode.trim() || undefined,
         previous_inspection_id: previousInspection?.id,
       });
@@ -464,10 +514,40 @@ function KitchenQCContent() {
                 : <div className="mt-3 space-y-3">
                 {previousInspection && (
                   <div className="rounded-xl border border-[#F5D59B] bg-[#FEF6E7] p-3 text-sm text-[#8A5300]">
-                    <p>Tindak lanjut pemeriksaan {formatDayLabel(previousInspection.day_index)}.</p>
+                    <p>Tindak lanjut pemeriksaan {formatDayLabel(previousInspection.day_index, previousInspection.service_date)}.</p>
                     <button type="button" onClick={() => setPreviousInspection(null)} className="mt-1 min-h-[44px] font-semibold underline">Batalkan tindak lanjut</button>
                   </div>
                 )}
+                <div>
+                  <label htmlFor="qc-service-date" className="block text-xs font-semibold text-[#4A6170]">
+                    Tanggal Pelayanan (WIB)
+                  </label>
+                  <input
+                    id="qc-service-date"
+                    type="date"
+                    disabled={Boolean(previousInspection)}
+                    value={lookupServiceDate}
+                    onChange={(e) => {
+                      setLookupServiceDate(e.target.value);
+                      setLastSyncedDateKey("");
+                    }}
+                    className="mt-1 min-h-[44px] w-full rounded-xl border border-[#DCE6DE] bg-white px-3 text-base text-[#16354A] sm:text-sm"
+                  />
+                  {effectiveByDateQuery.data && (
+                    <p className="mt-1 text-[11px] text-[#4A6170]">
+                      {matchedDatePlan && matchedDateDayIndex ? (
+                        <span className="font-semibold text-[#0F766E]">
+                          Terbaca aktif ({formatJakartaDate(lookupServiceDate)}): {matchedDatePlan.plan_title} —{" "}
+                          {formatDayLabel(matchedDateDayIndex, lookupServiceDate)}
+                        </span>
+                      ) : (
+                        <span>
+                          Tidak ada rencana aktif khusus pada {formatJakartaDate(lookupServiceDate)}; pilih rencana acuan manual di bawah.
+                        </span>
+                      )}
+                    </p>
+                  )}
+                </div>
                 <div>
                   <label htmlFor="qc-plan-select" className="block text-xs font-semibold text-[#4A6170]">
                     Rencana Menu Acuan
@@ -529,7 +609,7 @@ function KitchenQCContent() {
                       {!effectiveDay && <option value="">{planRunQuery.isLoading ? "Memuat…" : "Pilih hari"}</option>}
                       {planDays.map((day) => (
                         <option key={day.day_index} value={day.day_index}>
-                          {formatDayLabel(day.day_index)}
+                          {formatDayLabel(day.day_index, day.service_date)}
                         </option>
                       ))}
                     </select>
@@ -624,7 +704,9 @@ function KitchenQCContent() {
                           {insp.scenario_name}
                         </span>
                         <span className="shrink-0 text-[11px] font-semibold text-[#0F766E]">
-                          Hari {insp.day_index}
+                          {insp.service_date
+                            ? formatDayLabel(insp.day_index, insp.service_date)
+                            : `Hari ${insp.day_index}`}
                         </span>
                       </div>
                       <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
@@ -668,7 +750,7 @@ function KitchenQCContent() {
                 <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#EEF3EE] pb-4">
                   <div>
                     <h2 className="break-words text-base font-bold text-[#16354A]">
-                      {activeInspection.scenario_name} — {formatDayLabel(activeInspection.day_index)}
+                      {activeInspection.scenario_name} — {formatDayLabel(activeInspection.day_index, activeInspection.service_date)}
                     </h2>
                     <p className="mt-0.5 text-xs text-[#647A87]">
                       Dibuat oleh {activeInspection.created_by_name} •{" "}

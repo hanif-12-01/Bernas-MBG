@@ -31,6 +31,7 @@ import {
   formatIDR,
   formatMenuReviewStatus,
   formatOperationalStatus,
+  formatPeriodPhase,
   formatQCStatus,
   formatWeightFromGrams,
 } from "@/lib/formatters/indonesian";
@@ -270,7 +271,15 @@ export function ManagerDashboardView() {
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-sm font-bold text-[#16354A] break-words">{op.plan_title}</span>
-                    <StatusBadge tone={st.tone} label={st.label} />
+                    <div className="flex flex-wrap gap-1.5">
+                      {op.derived_period_phase && formatPeriodPhase(op.derived_period_phase) && (
+                        <StatusBadge
+                          tone={formatPeriodPhase(op.derived_period_phase)!.tone}
+                          label={formatPeriodPhase(op.derived_period_phase)!.label}
+                        />
+                      )}
+                      <StatusBadge tone={st.tone} label={st.label} />
+                    </div>
                   </div>
                   <p className="text-xs text-[#4A6170]">{op.scope_label}</p>
                   <p className="text-xs text-[#16354A] tabular-nums">
@@ -292,7 +301,7 @@ export function ManagerDashboardView() {
         {(data.approved_awaiting_activation?.length ?? 0) > 0 && (
           <div className="space-y-2.5 rounded-xl border border-[#F3D19B] bg-[#FFFBEB] p-4">
             <h3 className="text-xs font-bold uppercase tracking-wide text-[#92400E]">
-              Rencana Pengganti Disetujui — Menunggu Aktivasi ({data.approved_awaiting_activation!.length})
+              Rencana Disetujui — Menunggu Aktivasi ({data.approved_awaiting_activation!.length})
             </h3>
             {data.approved_awaiting_activation!.map((mr) => (
               <div
@@ -303,10 +312,24 @@ export function ManagerDashboardView() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-bold text-[#16354A]">{mr.title}</span>
                     <StatusBadge tone="warning" label="Disetujui (Belum Aktif)" />
+                    {mr.derived_period_phase && formatPeriodPhase(mr.derived_period_phase) && (
+                      <StatusBadge
+                        tone={formatPeriodPhase(mr.derived_period_phase)!.tone}
+                        label={formatPeriodPhase(mr.derived_period_phase)!.label}
+                      />
+                    )}
                   </div>
                   <p className="text-xs text-[#4A6170]">
+                    {mr.period_start_date
+                      ? `${formatJakartaDate(mr.period_start_date)}${mr.period_end_date && mr.period_end_date !== mr.period_start_date ? ` s.d. ${formatJakartaDate(mr.period_end_date)}` : ""} · `
+                      : ""}
                     Total {formatIDR(mr.objective_total_idr)} ({formatIDR(mr.cost_per_serving_average_idr)}/porsi)
                   </p>
+                  {mr.stock_confirmation_required && (
+                    <p className="text-[11px] font-semibold text-[#92400E]">
+                      Perlu Konfirmasi Stok — backend akan memeriksa stok &amp; kedaluwarsa terbaru saat aktivasi.
+                    </p>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -315,7 +338,7 @@ export function ManagerDashboardView() {
                   className="inline-flex min-h-[40px] shrink-0 items-center justify-center gap-2 rounded-xl bg-[#0F766E] px-4 py-2 text-xs font-bold text-white hover:bg-[#0B5F58] disabled:opacity-60"
                 >
                   <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-                  <span>Aktifkan Rencana Pengganti</span>
+                  <span>{mr.recovery_event_id ? "Aktifkan Rencana Pengganti" : "Aktifkan Rencana"}</span>
                 </button>
               </div>
             ))}

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from datetime import date, datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID, uuid4
 
 from sqlalchemy import or_, select
@@ -57,9 +57,22 @@ from app.ingestion.unit_converter import (
     convert_price_to_idr_per_g,
 )
 from app.inventory.service import InventoryAvailabilitySummary, compute_usable_inventory
+from app.operations.planning import (
+    MenuHistoryContext,
+    build_cross_week_comparison,
+    collect_previous_menu_history,
+    compute_cross_period_stock_context,
+    extract_scenario_service_dates,
+    normalize_service_dates,
+)
 from app.optimizer.diagnostics import diagnose_infeasibility
 from app.optimizer.model_builder import build_recipe_milp
-from app.optimizer.solver import RawSolveResult, create_cbc_solver, solve_built_model
+from app.optimizer.solver import (
+    RawSolveResult,
+    create_cbc_solver,
+    solve_built_model,
+    solve_with_cross_week_history,
+)
 from app.optimizer.verifier import verify_assignments
 from app.scenarios.service import (
     MODEL_VERSION,
@@ -361,6 +374,10 @@ class SQLiteVaultRepository:
             stock_overrides_raw_g=stock_overrides,
             source_label=SourceTypeEnum(row.source_label),
             production_date=row.production_date,
+            service_dates=extract_scenario_service_dates(row),
+            continuation_of_run_id=(
+                UUID(row.continuation_of_run_id) if row.continuation_of_run_id else None
+            ),
             locked=row.locked,
             created_at=row.created_at,
         )
@@ -398,6 +415,19 @@ class SQLiteVaultRepository:
         if self.session.get(NutritionTargetORM, str(target_id)) is None:
             raise ResourceNotFoundError(f"Nutrition target '{target_id}' not found")
 
+        try:
+            resolved_dates = normalize_service_dates(
+                req.production_date, req.days, req.service_dates
+            )
+        except ValueError as exc:
+            raise DataValidationError(str(exc)) from exc
+
+        prod_dt = req.production_date
+        if prod_dt is None and resolved_dates:
+            first_d = resolved_dates[0]
+            prod_dt = datetime(first_d.year, first_d.month, first_d.day, 8, 0, tzinfo=timezone.utc)
+        days_count = len(resolved_dates) if resolved_dates else req.days
+
         sc_id = uuid4()
         row = ScenarioORM(
             id=str(sc_id),
@@ -409,11 +439,15 @@ class SQLiteVaultRepository:
             meal_type=req.meal_type,
             servings_per_day=req.servings_per_day,
             budget_idr_per_serving=req.budget_idr_per_serving,
-            days=req.days,
+            days=days_count,
             max_repeat_per_family=req.max_repeat_per_family,
             excluded_allergens_json=list(req.excluded_allergens),
             source_label=req.source_label.value,
-            production_date=req.production_date,
+            production_date=prod_dt,
+            service_dates_json=[d.isoformat() for d in resolved_dates] if resolved_dates else None,
+            continuation_of_run_id=(
+                str(req.continuation_of_run_id) if req.continuation_of_run_id else None
+            ),
             locked=False,
             created_at=datetime.now(timezone.utc),
         )
@@ -461,6 +495,8 @@ class SQLiteVaultRepository:
             excluded_allergens_json=list(base.excluded_allergens_json or []),
             source_label=base.source_label,
             production_date=base.production_date,
+            service_dates_json=list(base.service_dates_json) if base.service_dates_json else None,
+            continuation_of_run_id=base.continuation_of_run_id,
             locked=False,
             created_at=datetime.now(timezone.utc),
         )
@@ -724,36 +760,96 @@ class SQLiteVaultRepository:
         effective_prices = {code: p.price_idr_per_g for code, p in base_prices.items()}
         effective_prices.update(scenario.price_overrides_idr_per_g)
 
+        service_dates: List[date] = list(scenario.service_dates)
+        if not service_dates and scenario.production_date is not None:
+            service_dates = normalize_service_dates(scenario.production_date, scenario.days)
+
         availability: Optional[InventoryAvailabilitySummary] = None
+        usable_stock_by_day: Optional[Dict[int, Dict[str, float]]] = None
+        stock_confirmation_required = False
+        stock_confirmation_reason: Optional[str] = None
         effective_stock: Dict[str, float] = {}
         inv_warnings: List[str] = []
         if effective_kitchen_id is not None:
-            availability = compute_usable_inventory(
-                self.session,
-                kitchen_id=effective_kitchen_id,
-                dataset_version_id=scenario.dataset_version_id,
-                production_date=scenario.production_date,
-            )
-            for item in availability.items:
-                if item.ingredient_code in scenario.stock_overrides_raw_g:
-                    override_val = scenario.stock_overrides_raw_g[item.ingredient_code]
-                    if item.safety_held_raw_g > 0 or item.rejected_disposed_raw_g > 0:
-                        max_clean_g = item.usable_raw_g if item.usable_raw_g is not None else 0.0
-                        if override_val > max_clean_g + 1e-6:
-                            raise ScenarioConflictError(
-                                f"Optimasi diblokir: bahan '{item.ingredient_name}' ({item.ingredient_code}) sedang ditahan keamanan (SAFETY HOLD). "
-                                f"Override stok ({override_val / 1000.0:.2f} kg) melebihi sisa lot bersih ({max_clean_g / 1000.0:.2f} kg)."
+            if service_dates:
+                stock_ctx = compute_cross_period_stock_context(
+                    self.session,
+                    kitchen_id=effective_kitchen_id,
+                    dataset_version_id=scenario.dataset_version_id,
+                    service_dates=service_dates,
+                )
+                availability = stock_ctx.base_availability
+                usable_stock_by_day = {
+                    d: dict(m) for d, m in stock_ctx.usable_stock_by_day.items()
+                }
+                stock_confirmation_required = stock_ctx.stock_confirmation_required
+                stock_confirmation_reason = stock_ctx.stock_confirmation_reason
+                inv_warnings.extend(stock_ctx.warnings)
+                for item in availability.items:
+                    if item.ingredient_code in scenario.stock_overrides_raw_g:
+                        override_val = scenario.stock_overrides_raw_g[item.ingredient_code]
+                        if item.safety_held_raw_g > 0 or item.rejected_disposed_raw_g > 0:
+                            max_clean_g = (
+                                item.usable_raw_g if item.usable_raw_g is not None else 0.0
                             )
-                    effective_stock[item.ingredient_code] = override_val
-                elif item.usable_raw_g is not None:
-                    effective_stock[item.ingredient_code] = item.usable_raw_g
-                    if item.warnings:
+                            if override_val > max_clean_g + 1e-6:
+                                raise ScenarioConflictError(
+                                    f"Optimasi diblokir: bahan '{item.ingredient_name}' ({item.ingredient_code}) sedang ditahan keamanan (SAFETY HOLD). "
+                                    f"Override stok ({override_val / 1000.0:.2f} kg) melebihi sisa lot bersih ({max_clean_g / 1000.0:.2f} kg)."
+                                )
+                        effective_stock[item.ingredient_code] = override_val
+                        for day_map in usable_stock_by_day.values():
+                            day_map[item.ingredient_code] = override_val
+                    elif item.ingredient_code in stock_ctx.effective_stock:
+                        effective_stock[item.ingredient_code] = stock_ctx.effective_stock[
+                            item.ingredient_code
+                        ]
+                        if item.warnings:
+                            inv_warnings.append(item.availability_explanation)
+                    else:
                         inv_warnings.append(item.availability_explanation)
-                else:
-                    inv_warnings.append(item.availability_explanation)
+            else:
+                availability = compute_usable_inventory(
+                    self.session,
+                    kitchen_id=effective_kitchen_id,
+                    dataset_version_id=scenario.dataset_version_id,
+                    production_date=scenario.production_date,
+                )
+                for item in availability.items:
+                    if item.ingredient_code in scenario.stock_overrides_raw_g:
+                        override_val = scenario.stock_overrides_raw_g[item.ingredient_code]
+                        if item.safety_held_raw_g > 0 or item.rejected_disposed_raw_g > 0:
+                            max_clean_g = (
+                                item.usable_raw_g if item.usable_raw_g is not None else 0.0
+                            )
+                            if override_val > max_clean_g + 1e-6:
+                                raise ScenarioConflictError(
+                                    f"Optimasi diblokir: bahan '{item.ingredient_name}' ({item.ingredient_code}) sedang ditahan keamanan (SAFETY HOLD). "
+                                    f"Override stok ({override_val / 1000.0:.2f} kg) melebihi sisa lot bersih ({max_clean_g / 1000.0:.2f} kg)."
+                                )
+                        effective_stock[item.ingredient_code] = override_val
+                    elif item.usable_raw_g is not None:
+                        effective_stock[item.ingredient_code] = item.usable_raw_g
+                        if item.warnings:
+                            inv_warnings.append(item.availability_explanation)
+                    else:
+                        inv_warnings.append(item.availability_explanation)
         else:
             effective_stock = {code: s.stock_raw_g for code, s in base_stock.items()}
             effective_stock.update(scenario.stock_overrides_raw_g)
+
+        history_ctx: Optional[MenuHistoryContext] = None
+        if effective_kitchen_id is not None and service_dates:
+            history_ctx = collect_previous_menu_history(
+                self.session,
+                kitchen_id=effective_kitchen_id,
+                before_date=service_dates[0],
+                meal_type=scenario.meal_type,
+                target_cohort=target.cohort,
+                batch_label="DEFAULT",
+                window_days=5,
+                fallback_source_run_id=scenario.continuation_of_run_id,
+            )
 
         all_features = precompute_all_recipes(
             recipes, ingredients_by_code, effective_prices, target.limits
@@ -768,6 +864,7 @@ class SQLiteVaultRepository:
                 target=target,
                 stock_raw_g=effective_stock,
                 ingredients_by_code=ingredients_by_code,
+                usable_stock_by_day=usable_stock_by_day,
             )
         except ValueError as exc:
             raise DataValidationError(str(exc)) from exc
@@ -781,6 +878,8 @@ class SQLiteVaultRepository:
             recipes=recipes,
             availability=availability,
         )
+        if service_dates:
+            input_snapshot["service_dates"] = [d.isoformat() for d in service_dates]
         input_sha256 = compute_snapshot_sha256(input_snapshot)
         price_snapshot_id = f"snap-{input_sha256[:12]}"
 
@@ -796,16 +895,29 @@ class SQLiteVaultRepository:
         if inv_warnings:
             warnings.extend(inv_warnings[:6])
 
-        raw_result = (
-            forced_raw_result
-            if forced_raw_result is not None
-            else solve_built_model(built, time_limit_seconds=time_limit_seconds)
-        )
+        if forced_raw_result is not None:
+            raw_result = forced_raw_result
+        elif history_ctx is not None and history_ctx.days:
+            raw_result, _boundary_penalty = solve_with_cross_week_history(
+                scenario=scenario,
+                recipes=recipes,
+                features_by_id=features_by_id,
+                target=target,
+                stock_raw_g=effective_stock,
+                history_days=history_ctx.days,
+                ingredients_by_code=ingredients_by_code,
+                usable_stock_by_day=usable_stock_by_day,
+                time_limit_seconds=time_limit_seconds,
+                window_days=5,
+            )
+        else:
+            raw_result = solve_built_model(built, time_limit_seconds=time_limit_seconds)
 
         # Build OptimizationRunResponse object
         run_id = uuid4()
         created_at = datetime.now(timezone.utc)
         total_servings = scenario.days * scenario.servings_per_day
+        base_history_summary = history_ctx.to_summary_dict() if history_ctx is not None else None
         common_meta = dict(
             run_id=run_id,
             scenario_id=scenario.id,
@@ -813,6 +925,7 @@ class SQLiteVaultRepository:
             price_snapshot_id=price_snapshot_id,
             simulation_only=True,
             days_count=scenario.days,
+            service_dates=service_dates,
             servings_per_day=scenario.servings_per_day,
             total_servings=total_servings,
             total_menu_slots=scenario.days * len(SlotEnum),
@@ -826,6 +939,9 @@ class SQLiteVaultRepository:
             input_sha256=input_sha256,
             model_version=MODEL_VERSION,
             input_snapshot=input_snapshot,
+            stock_confirmation_required=stock_confirmation_required,
+            stock_confirmation_reason=stock_confirmation_reason,
+            history_context=base_history_summary,
             created_at=created_at,
         )
 
@@ -897,6 +1013,7 @@ class SQLiteVaultRepository:
                 stock_raw_g=effective_stock,
                 raw_x_values=raw_result.raw_x_values,
                 reported_objective=raw_result.reported_objective,
+                usable_stock_by_day=usable_stock_by_day,
             )
             if not audit.all_hard_constraints_pass:
                 run_resp = OptimizationRunResponse(
@@ -939,6 +1056,11 @@ class SQLiteVaultRepository:
                     day_plans.append(
                         DayPlan(
                             day_index=d,
+                            service_date=(
+                                service_dates[d - 1]
+                                if 0 <= d - 1 < len(service_dates)
+                                else None
+                            ),
                             recipes_by_slot=slot_map,
                             recipe_names_by_slot=names_map,
                             daily_cost_idr_per_serving=round(day_cost_per_serving, 2),
@@ -957,9 +1079,20 @@ class SQLiteVaultRepository:
                 ]
                 avg_cost = total_cost_idr / (scenario.days * scenario.servings_per_day)
                 avg_daily_cost = total_cost_idr / max(1, scenario.days)
+                final_history_context = (
+                    build_cross_week_comparison(
+                        history_ctx,
+                        day_plans,
+                        recipes_by_id,
+                        round(avg_cost, 2),
+                    )
+                    if history_ctx is not None
+                    else None
+                )
                 solved_meta = {
                     **common_meta,
                     "total_menu_slots": sum(len(d.recipes_by_slot) for d in day_plans),
+                    "history_context": final_history_context,
                 }
 
                 run_resp = OptimizationRunResponse(
@@ -974,6 +1107,15 @@ class SQLiteVaultRepository:
                     constraint_audit=audit,
                     warnings=warnings,
                 )
+
+        # Persist cross-week metadata cleanly inside input_snapshot_json (without altering input_sha256)
+        persisted_snapshot = dict(run_resp.input_snapshot)
+        persisted_snapshot["_cross_week_meta"] = {
+            "service_dates": [d.isoformat() for d in service_dates],
+            "stock_confirmation_required": run_resp.stock_confirmation_required,
+            "stock_confirmation_reason": run_resp.stock_confirmation_reason,
+            "history_context": run_resp.history_context,
+        }
 
         # Persist scenario lock + run + assignments + metrics + material usage atomically
         try:
@@ -1000,7 +1142,7 @@ class SQLiteVaultRepository:
                 solver_seconds=run_resp.solver_seconds,
                 model_version=run_resp.model_version,
                 input_sha256=run_resp.input_sha256,
-                input_snapshot_json=run_resp.input_snapshot,
+                input_snapshot_json=persisted_snapshot,
                 constraint_audit_json=run_resp.constraint_audit.model_dump(mode="json"),
                 constraint_diagnostics_json=[
                     d.model_dump(mode="json") for d in run_resp.constraint_diagnostics
@@ -1100,9 +1242,19 @@ class SQLiteVaultRepository:
                     metric.actual_value
                 )
 
+        sc_row = self.session.get(ScenarioORM, row.scenario_id)
+        snap_raw = dict(row.input_snapshot_json or {})
+        cw_meta = snap_raw.get("_cross_week_meta") if isinstance(snap_raw.get("_cross_week_meta"), dict) else {}
+        svc_dates: List[date] = []
+        if sc_row is not None:
+            svc_dates = extract_scenario_service_dates(sc_row)
+        if not svc_dates and isinstance(cw_meta.get("service_dates"), list):
+            svc_dates = [date.fromisoformat(str(x)[:10]) for x in cw_meta["service_dates"]]
+
         days = [
             DayPlan(
                 day_index=d_idx,
+                service_date=svc_dates[d_idx - 1] if 0 <= d_idx - 1 < len(svc_dates) else None,
                 recipes_by_slot=bucket["recipes_by_slot"],
                 recipe_names_by_slot=bucket["recipe_names_by_slot"],
                 daily_cost_idr_per_serving=bucket["daily_cost_idr_per_serving"],
@@ -1121,8 +1273,7 @@ class SQLiteVaultRepository:
             for m in sorted(row.material_usage, key=lambda x: x.ingredient_code)
         ]
 
-        sc_row = self.session.get(ScenarioORM, row.scenario_id)
-        snap_params = (row.input_snapshot_json or {}).get("scenario_parameters", {})
+        snap_params = snap_raw.get("scenario_parameters", {})
         days_count = sc_row.days if sc_row is not None else (snap_params.get("days") or len(days))
         servings_per_day = (
             sc_row.servings_per_day
@@ -1154,6 +1305,7 @@ class SQLiteVaultRepository:
             validation_passed=row.validation_passed,
             simulation_only=row.simulation_only,
             days_count=days_count,
+            service_dates=svc_dates,
             servings_per_day=servings_per_day,
             total_servings=total_servings,
             total_menu_slots=total_menu_slots,
@@ -1169,7 +1321,10 @@ class SQLiteVaultRepository:
             solver_seconds=row.solver_seconds,
             input_sha256=row.input_sha256,
             model_version=row.model_version,
-            input_snapshot=dict(row.input_snapshot_json or {}),
+            input_snapshot=snap_raw,
+            stock_confirmation_required=bool(cw_meta.get("stock_confirmation_required", False)),
+            stock_confirmation_reason=cw_meta.get("stock_confirmation_reason"),
+            history_context=cw_meta.get("history_context"),
             days=days,
             material_usage=material_usage,
             constraint_audit=ConstraintAudit.model_validate(row.constraint_audit_json),

@@ -25,6 +25,12 @@ from app.domain.models.schemas import (
 )
 from app.export.csv_exporter import ExportConflictError, export_run_to_csv
 from app.ingestion.unit_converter import DataValidationError, UnitConversionError
+from app.operations.next_week import get_next_week_defaults, prepare_next_week_plan
+from app.operations.planning import (
+    NextWeekDefaultsResponse,
+    PrepareNextWeekRequest,
+    PrepareNextWeekResponse,
+)
 from app.scenarios.service import ResourceNotFoundError, ScenarioConflictError
 
 router = APIRouter(tags=["scenarios"])
@@ -116,6 +122,37 @@ def api_create_scenario(
         )
         session.commit()
         return sc
+    except ResourceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ScenarioConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (DataValidationError, UnitConversionError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/scenarios/next-week-defaults", response_model=NextWeekDefaultsResponse)
+def api_get_next_week_defaults(
+    source_run_id: Optional[UUID] = None,
+    source_assignment_id: Optional[UUID] = None,
+    auth: AuthContext = Depends(require_roles(RoleEnum.MENU_PLANNER, RoleEnum.KITCHEN_MANAGER)),
+    session: Session = Depends(_get_session),
+) -> NextWeekDefaultsResponse:
+    return get_next_week_defaults(
+        session,
+        auth,
+        source_run_id=source_run_id,
+        source_assignment_id=source_assignment_id,
+    )
+
+
+@router.post("/scenarios/prepare-next-week", response_model=PrepareNextWeekResponse, status_code=201)
+def api_prepare_next_week(
+    req: PrepareNextWeekRequest,
+    auth: AuthContext = Depends(require_roles(RoleEnum.MENU_PLANNER)),
+    session: Session = Depends(_get_session),
+) -> PrepareNextWeekResponse:
+    try:
+        return prepare_next_week_plan(session, auth, req)
     except ResourceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ScenarioConflictError as exc:

@@ -92,11 +92,37 @@ export function formatDateTimeID(isoDate: string | null | undefined): string {
 
 const DAY_NAMES = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"];
 
-export function formatDayLabel(dayIndex: number): string {
+export function formatDayLabel(dayIndex: number, serviceDate?: string | null): string {
+  if (serviceDate) {
+    const trimmed = serviceDate.trim();
+    const dt = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+      ? new Date(`${trimmed}T08:00:00+07:00`)
+      : new Date(trimmed);
+    if (!Number.isNaN(dt.getTime())) {
+      const formatted = new Intl.DateTimeFormat("id-ID", {
+        timeZone: "Asia/Jakarta",
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+      }).format(dt);
+      return `Hari ${dayIndex} (${formatted})`;
+    }
+  }
   if (dayIndex >= 1 && dayIndex <= DAY_NAMES.length) {
     return `Hari ${dayIndex} (${DAY_NAMES[dayIndex - 1]})`;
   }
   return `Hari ${dayIndex}`;
+}
+
+export function formatPeriodPhase(phase: string | null | undefined): {
+  label: string;
+  tone: "success" | "warning" | "critical" | "neutral";
+} | null {
+  if (!phase) return null;
+  if (phase === "IN_PROGRESS") return { label: "Minggu Berjalan", tone: "success" };
+  if (phase === "UPCOMING") return { label: "Minggu Mendatang", tone: "warning" };
+  if (phase === "COMPLETED") return { label: "Periode Selesai", tone: "neutral" };
+  return { label: phase, tone: "neutral" };
 }
 
 export function formatSlotLabel(slot: SlotEnum | string): string {
@@ -291,6 +317,7 @@ export function formatAuditAction(action: string): string {
     "auth.logout": "Keluar dari sistem",
     "auth.switch_kitchen": "Berpindah dapur aktif",
     "scenario.created": "Membuat skenario menu baru",
+    "scenario.next_week_prepared": "Menyiapkan draf rencana minggu berikutnya",
     "scenario.cloned": "Menyalin skenario untuk simulasi",
     "scenario.price_overrides_updated": "Mengubah simulasi harga bahan",
     "scenario.stock_overrides_updated": "Mengubah simulasi stok bahan",

@@ -129,6 +129,7 @@ def verify_assignments(
     raw_x_values: Optional[Dict[Tuple[int, UUID], Optional[float]]] = None,
     reported_objective: Optional[float] = None,
     tolerance: float = 1e-6,
+    usable_stock_by_day: Optional[Dict[int, Dict[str, float]]] = None,
 ) -> ConstraintAudit:
     """Independently re-compute and audit all hard constraints from raw master data and decision variables.
 
@@ -139,6 +140,9 @@ def verify_assignments(
     excluded_set: Set[str] = {a.strip().lower() for a in scenario.excluded_allergens if a.strip()}
     family_counts: Dict[str, int] = {}
     ingredient_usage: Dict[str, float] = {}
+    ingredient_usage_by_day: Dict[int, Dict[str, float]] = {
+        d: {} for d in range(1, scenario.days + 1)
+    }
     recomputed_total_cost = 0.0
 
     # 0. Verify raw binary / integrality constraints and slot counts directly on x_{dr}
@@ -279,8 +283,10 @@ def verify_assignments(
 
             family_counts[rec.family] = family_counts.get(rec.family, 0) + 1
             for ing_code, raw_g in rec_raw_grams.items():
-                ingredient_usage[ing_code] = (
-                    ingredient_usage.get(ing_code, 0.0) + raw_g * scenario.servings_per_day
+                used_today = raw_g * scenario.servings_per_day
+                ingredient_usage[ing_code] = ingredient_usage.get(ing_code, 0.0) + used_today
+                ingredient_usage_by_day[d][ing_code] = (
+                    ingredient_usage_by_day[d].get(ing_code, 0.0) + used_today
                 )
 
         recomputed_total_cost += day_cost * scenario.servings_per_day
@@ -346,6 +352,34 @@ def verify_assignments(
                     actual=round(used, 4),
                 )
             )
+
+    # 3b. Per-date FEFO expiry suffix stock audit (if per-date stock bounds provided)
+    if usable_stock_by_day is not None:
+        all_used_codes = sorted(ingredient_usage.keys())
+        for d_start in range(1, scenario.days + 1):
+            day_stock_map = usable_stock_by_day.get(d_start)
+            if day_stock_map is None:
+                continue
+            for ing_code in all_used_codes:
+                if ing_code not in day_stock_map:
+                    continue
+                avail_from_d = day_stock_map[ing_code]
+                suffix_used = sum(
+                    ingredient_usage_by_day[k].get(ing_code, 0.0)
+                    for k in range(d_start, scenario.days + 1)
+                )
+                if suffix_used > avail_from_d + tolerance:
+                    violations.append(
+                        ConstraintViolation(
+                            constraint_family="stock_expiry",
+                            detail=(
+                                f"Ingredient {ing_code} usage from day {d_start}..{scenario.days} "
+                                f"exceeds stock unexpired at day {d_start}"
+                            ),
+                            expected=avail_from_d,
+                            actual=round(suffix_used, 4),
+                        )
+                    )
 
     # 4. Repeat cap check
     for family, cnt in sorted(family_counts.items()):

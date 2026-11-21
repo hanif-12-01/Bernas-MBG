@@ -13,6 +13,7 @@ from app.auth.schemas import RoleEnum
 from app.db.models import (
     MenuReviewRecordORM,
     OperationalPlanAssignmentORM,
+    OperationalPlanServiceDateORM,
     OptimizationRunORM,
     RecoveryEventORM,
     RunMaterialUsageORM,
@@ -21,7 +22,17 @@ from app.db.models import (
 )
 from app.db.repository import SQLiteVaultRepository
 from app.inventory.service import compute_usable_inventory
-from app.operations.service import derive_production_scope
+from app.operations.planning import (
+    compute_cross_period_stock_context,
+    derive_period_phase,
+    extract_scenario_service_dates,
+)
+from app.operations.service import (
+    _date_scope_key,
+    check_run_stock_feasibility_across_dates,
+    derive_production_scope,
+    sync_assignment_service_dates,
+)
 from app.recovery.snapshot import compute_usable_inventory_sha256
 from app.scenarios.service import ResourceNotFoundError
 from app.reviews.schemas import (
@@ -49,11 +60,21 @@ def _to_response(session: Session, row: MenuReviewRecordORM) -> MenuReviewRespon
         if row.recovery_event_id
         else None
     )
+    svc_dates = extract_scenario_service_dates(sc) if sc is not None else []
+    period_start = svc_dates[0] if svc_dates else None
+    period_end = svc_dates[-1] if svc_dates else None
+    derived_phase = derive_period_phase(svc_dates)
+    cw_meta = ((run.input_snapshot_json or {}).get("_cross_week_meta") or {}) if run else {}
+
     is_stale = False
     if (
-        row.recovery_event_id
+        (row.recovery_event_id or (sc is not None and sc.continuation_of_run_id))
         and row.inventory_snapshot_sha256
-        and row.status in {MenuReviewStatusEnum.DRAFT.value, MenuReviewStatusEnum.SUBMITTED.value}
+        and row.status in {
+            MenuReviewStatusEnum.DRAFT.value,
+            MenuReviewStatusEnum.SUBMITTED.value,
+            MenuReviewStatusEnum.APPROVED.value,
+        }
     ):
         live_summary = compute_usable_inventory(
             session,
@@ -70,7 +91,7 @@ def _to_response(session: Session, row: MenuReviewRecordORM) -> MenuReviewRespon
         if isinstance(cand_info, dict) and "changed_slots_count" in cand_info:
             changed_slots_count = int(cand_info["changed_slots_count"])
 
-    days_count = sc.days if sc else 5
+    days_count = len(svc_dates) if svc_dates else (sc.days if sc else 5)
     servings_per_day = sc.servings_per_day if sc else None
     total_servings = (days_count * servings_per_day) if servings_per_day is not None else None
     cost_per_day_avg = (
@@ -94,7 +115,12 @@ def _to_response(session: Session, row: MenuReviewRecordORM) -> MenuReviewRespon
         op_assign_id = UUID(op_row.id)
         hold_incident_id = UUID(op_row.hold_incident_id) if op_row.hold_incident_id else None
         hold_reason = op_row.hold_reason
-        scope_label = f"{op_row.production_date.isoformat()} • {op_row.meal_type} • {op_row.target_cohort}" + (
+        p_txt = (
+            f"{period_start.isoformat()} s.d. {period_end.isoformat()}"
+            if period_start and period_end and period_start != period_end
+            else op_row.production_date.isoformat()
+        )
+        scope_label = f"{p_txt} • {op_row.meal_type} • {op_row.target_cohort}" + (
             f" • {op_row.batch_label}" if op_row.batch_label and op_row.batch_label != "DEFAULT" else ""
         )
     elif row.status == MenuReviewStatusEnum.APPROVED.value:
@@ -141,6 +167,17 @@ def _to_response(session: Session, row: MenuReviewRecordORM) -> MenuReviewRespon
         operational_status=op_status,
         operational_assignment_id=op_assign_id,
         production_scope_label=scope_label,
+        service_dates=svc_dates,
+        period_start_date=period_start,
+        period_end_date=period_end,
+        derived_period_phase=derived_phase,
+        continuation_of_run_id=(
+            UUID(sc.continuation_of_run_id)
+            if sc is not None and sc.continuation_of_run_id
+            else None
+        ),
+        stock_confirmation_required=bool(cw_meta.get("stock_confirmation_required", False)),
+        stock_confirmation_reason=cw_meta.get("stock_confirmation_reason"),
         hold_incident_id=hold_incident_id,
         hold_reason=hold_reason,
     )
@@ -391,43 +428,83 @@ def review_menu_plan(
 
     live_sha: Optional[str] = None
     sc = session.get(ScenarioORM, row.scenario_id)
+    svc_dates = extract_scenario_service_dates(sc) if sc is not None else []
     if req.decision == MenuReviewDecisionEnum.APPROVED:
-        live_summary = compute_usable_inventory(
-            session,
-            kitchen_id=UUID(row.kitchen_id),
-            dataset_version_id=UUID(row.dataset_version_id),
-            production_date=sc.production_date if sc else None,
-        )
-        live_sha = compute_usable_inventory_sha256(live_summary)
-        if row.recovery_event_id and row.inventory_snapshot_sha256 and live_sha != row.inventory_snapshot_sha256:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Snapshot inventaris telah berubah sejak usulan rencana pengganti diajukan. "
-                    "Persetujuan diblokir (409 Stale Snapshot); minta Perencana Menu menghitung ulang rencana pengganti."
-                ),
+        if svc_dates and sc is not None:
+            stock_ctx = compute_cross_period_stock_context(
+                session,
+                kitchen_id=UUID(row.kitchen_id),
+                dataset_version_id=UUID(row.dataset_version_id),
+                service_dates=svc_dates,
             )
-        avail_by_code = {item.ingredient_code: item for item in live_summary.items}
-        usages = list(
-            session.execute(
-                select(RunMaterialUsageORM).where(RunMaterialUsageORM.run_id == row.run_id)
+            live_summary = stock_ctx.base_availability
+            live_sha = compute_usable_inventory_sha256(live_summary)
+            if (
+                row.recovery_event_id
+                and row.inventory_snapshot_sha256
+                and live_sha != row.inventory_snapshot_sha256
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Snapshot inventaris telah berubah sejak usulan rencana pengganti diajukan. "
+                        "Persetujuan diblokir (409 Stale Snapshot); minta Perencana Menu menghitung ulang rencana pengganti."
+                    ),
+                )
+            shortages = check_run_stock_feasibility_across_dates(
+                session,
+                run_id=row.run_id,
+                servings_per_day=int(sc.servings_per_day),
+                service_dates=svc_dates,
+                stock_ctx=stock_ctx,
             )
-            .scalars()
-            .all()
-        )
-        shortages: List[str] = []
-        for u in usages:
-            av = avail_by_code.get(u.ingredient_code)
-            if av is None or av.usable_raw_g is None or av.usable_raw_g + 1e-6 < u.used_raw_g:
-                avail_kg = 0.0 if (av is None or av.usable_raw_g is None) else av.usable_raw_g / 1000.0
-                if av is not None and (av.safety_held_raw_g > 0 or av.rejected_disposed_raw_g > 0):
-                    shortages.append(
-                        f"{u.ingredient_name} (SAFETY HOLD; sisa bersih {avail_kg:.2f} kg, butuh {u.used_raw_g / 1000.0:.2f} kg)"
+        else:
+            live_summary = compute_usable_inventory(
+                session,
+                kitchen_id=UUID(row.kitchen_id),
+                dataset_version_id=UUID(row.dataset_version_id),
+                production_date=sc.production_date if sc else None,
+            )
+            live_sha = compute_usable_inventory_sha256(live_summary)
+            if (
+                row.recovery_event_id
+                and row.inventory_snapshot_sha256
+                and live_sha != row.inventory_snapshot_sha256
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Snapshot inventaris telah berubah sejak usulan rencana pengganti diajukan. "
+                        "Persetujuan diblokir (409 Stale Snapshot); minta Perencana Menu menghitung ulang rencana pengganti."
+                    ),
+                )
+            avail_by_code = {item.ingredient_code: item for item in live_summary.items}
+            usages = list(
+                session.execute(
+                    select(RunMaterialUsageORM).where(RunMaterialUsageORM.run_id == row.run_id)
+                )
+                .scalars()
+                .all()
+            )
+            shortages = []
+            for u in usages:
+                av = avail_by_code.get(u.ingredient_code)
+                if av is None or av.usable_raw_g is None or av.usable_raw_g + 1e-6 < u.used_raw_g:
+                    avail_kg = (
+                        0.0
+                        if (av is None or av.usable_raw_g is None)
+                        else av.usable_raw_g / 1000.0
                     )
-                else:
-                    shortages.append(
-                        f"{u.ingredient_name} (siap pakai {avail_kg:.2f} kg, butuh {u.used_raw_g / 1000.0:.2f} kg)"
-                    )
+                    if av is not None and (
+                        av.safety_held_raw_g > 0 or av.rejected_disposed_raw_g > 0
+                    ):
+                        shortages.append(
+                            f"{u.ingredient_name} (SAFETY HOLD; sisa bersih {avail_kg:.2f} kg, butuh {u.used_raw_g / 1000.0:.2f} kg)"
+                        )
+                    else:
+                        shortages.append(
+                            f"{u.ingredient_name} (siap pakai {avail_kg:.2f} kg, butuh {u.used_raw_g / 1000.0:.2f} kg)"
+                        )
         if shortages:
             raise HTTPException(
                 status_code=409,
@@ -439,10 +516,23 @@ def review_menu_plan(
             )
 
     now = datetime.now(timezone.utc)
+    transition_values = dict(
+        status=req.decision.value,
+        reviewer_notes=notes,
+        reviewed_by_user_id=str(auth.user_id),
+        reviewed_at=now,
+        updated_at=now,
+    )
+    if (
+        req.decision == MenuReviewDecisionEnum.APPROVED
+        and not row.inventory_snapshot_sha256
+        and live_sha is not None
+    ):
+        transition_values["inventory_snapshot_sha256"] = live_sha
+
     _transition_review(
         session, row, MenuReviewStatusEnum.SUBMITTED,
-        status=req.decision.value, reviewer_notes=notes,
-        reviewed_by_user_id=str(auth.user_id), reviewed_at=now, updated_at=now,
+        **transition_values,
     )
     if row.recovery_event_id:
         rec_event = session.get(RecoveryEventORM, row.recovery_event_id)
@@ -452,39 +542,66 @@ def review_menu_plan(
 
     if req.decision == MenuReviewDecisionEnum.APPROVED and sc is not None and sc.kitchen_id:
         scope = derive_production_scope(session, sc)
+        eff_dates = scope.service_dates or svc_dates
         existing_active = session.execute(
             select(OperationalPlanAssignmentORM).where(
                 OperationalPlanAssignmentORM.active_scope_key == scope.scope_key
             )
         ).scalar_one_or_none()
-        if existing_active is None and row.recovery_event_id is None:
-            session.add(
-                OperationalPlanAssignmentORM(
-                    id=str(uuid4()),
-                    kitchen_id=row.kitchen_id,
-                    dataset_version_id=row.dataset_version_id,
-                    menu_review_id=row.id,
-                    run_id=row.run_id,
-                    scenario_id=row.scenario_id,
-                    operational_status="ACTIVE",
-                    production_date=scope.production_date,
-                    horizon_days=scope.horizon_days,
-                    meal_type=scope.meal_type,
-                    target_cohort=scope.target_cohort,
-                    batch_label=scope.batch_label,
-                    active_scope_key=scope.scope_key,
-                    supersedes_assignment_id=None,
-                    hold_incident_id=None,
-                    hold_reason=None,
-                    held_at=None,
-                    activated_by_user_id=str(auth.user_id),
-                    activated_at=now,
-                    superseded_at=None,
-                    inventory_snapshot_sha256=live_sha,
-                    created_at=now,
-                    updated_at=now,
+        date_keys = [
+            _date_scope_key(
+                row.kitchen_id, d, scope.meal_type, scope.target_cohort, scope.batch_label
+            )
+            for d in eff_dates
+        ]
+        overlapping_date = (
+            session.execute(
+                select(OperationalPlanServiceDateORM.id).where(
+                    OperationalPlanServiceDateORM.active_date_scope_key.in_(date_keys)
                 )
             )
+            .scalars()
+            .first()
+            if date_keys
+            else None
+        )
+        # Never auto-activate recovery replacements, next-week continuation plans, or overlapping dates
+        if (
+            existing_active is None
+            and row.recovery_event_id is None
+            and sc.continuation_of_run_id is None
+            and overlapping_date is None
+        ):
+            new_assign = OperationalPlanAssignmentORM(
+                id=str(uuid4()),
+                kitchen_id=row.kitchen_id,
+                dataset_version_id=row.dataset_version_id,
+                menu_review_id=row.id,
+                run_id=row.run_id,
+                scenario_id=row.scenario_id,
+                operational_status="ACTIVE",
+                production_date=scope.production_date,
+                horizon_days=len(eff_dates) if eff_dates else scope.horizon_days,
+                service_dates_json=[d.isoformat() for d in eff_dates] if eff_dates else None,
+                meal_type=scope.meal_type,
+                target_cohort=scope.target_cohort,
+                batch_label=scope.batch_label,
+                active_scope_key=scope.scope_key,
+                supersedes_assignment_id=None,
+                hold_incident_id=None,
+                hold_reason=None,
+                held_at=None,
+                activated_by_user_id=str(auth.user_id),
+                activated_at=now,
+                superseded_at=None,
+                inventory_snapshot_sha256=live_sha,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(new_assign)
+            session.flush()
+            if eff_dates:
+                sync_assignment_service_dates(session, new_assign, eff_dates, is_effective=True)
 
     record_audit_event(
         session,

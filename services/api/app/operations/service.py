@@ -14,10 +14,13 @@ from app.auth.schemas import RoleEnum
 from app.db.models import (
     IngredientIncidentORM,
     IncidentActionORM,
+    IngredientORM,
     MenuReviewRecordORM,
     NutritionTargetORM,
     OperationalPlanAssignmentORM,
+    OperationalPlanServiceDateORM,
     OptimizationRunORM,
+    RecipeVariantORM,
     RecoveryEventORM,
     RunAssignmentORM,
     RunMaterialUsageORM,
@@ -26,6 +29,14 @@ from app.db.models import (
     UserORM,
 )
 from app.inventory.service import compute_usable_inventory
+from app.operations.planning import (
+    CrossPeriodStockContext,
+    compute_cross_period_stock_context,
+    default_weekdays,
+    derive_period_phase,
+    extract_assignment_service_dates,
+    extract_scenario_service_dates,
+)
 from app.operations.schemas import (
     ActivateReplacementPlanRequest,
     EffectiveOperationalPlanResponse,
@@ -35,6 +46,151 @@ from app.operations.schemas import (
     ProductionScopeInfo,
 )
 from app.recovery.snapshot import compute_usable_inventory_sha256
+
+
+def _date_scope_key(
+    kitchen_id: str,
+    service_date: date,
+    meal_type: str,
+    target_cohort: str,
+    batch_label: str,
+) -> str:
+    return f"{kitchen_id}|{service_date.isoformat()}|{meal_type}|{target_cohort}|{batch_label}"
+
+
+def sync_assignment_service_dates(
+    session: Session,
+    assign: OperationalPlanAssignmentORM,
+    service_dates: List[date],
+    *,
+    is_effective: bool,
+) -> None:
+    """Persist per-date operational plan bindings with DB-level uniqueness when effective."""
+    for idx, svc_d in enumerate(service_dates, start=1):
+        session.add(
+            OperationalPlanServiceDateORM(
+                id=str(uuid4()),
+                assignment_id=assign.id,
+                kitchen_id=assign.kitchen_id,
+                service_date=svc_d,
+                day_index=idx,
+                meal_type=assign.meal_type,
+                target_cohort=assign.target_cohort,
+                batch_label=assign.batch_label,
+                active_date_scope_key=(
+                    _date_scope_key(
+                        assign.kitchen_id,
+                        svc_d,
+                        assign.meal_type,
+                        assign.target_cohort,
+                        assign.batch_label,
+                    )
+                    if is_effective
+                    else None
+                ),
+            )
+        )
+
+
+def check_run_stock_feasibility_across_dates(
+    session: Session,
+    *,
+    run_id: str,
+    servings_per_day: int,
+    service_dates: List[date],
+    stock_ctx: CrossPeriodStockContext,
+) -> List[str]:
+    """Verify total and per-service-date FEFO suffix ingredient usage against live usable stock."""
+    issues: List[str] = []
+    avail_by_code = {item.ingredient_code: item for item in stock_ctx.base_availability.items}
+    usages = list(
+        session.execute(
+            select(RunMaterialUsageORM).where(RunMaterialUsageORM.run_id == run_id)
+        )
+        .scalars()
+        .all()
+    )
+    name_by_code = {u.ingredient_code: u.ingredient_name for u in usages}
+    for u in usages:
+        item = avail_by_code.get(u.ingredient_code)
+        eff_g = stock_ctx.effective_stock.get(u.ingredient_code)
+        if item is None or item.usable_raw_g is None or eff_g is None:
+            issues.append(f"{u.ingredient_name} (UNKNOWN/tidak tersedia)")
+        elif eff_g + 1e-6 < u.used_raw_g:
+            if item.safety_held_raw_g > 0 or item.rejected_disposed_raw_g > 0:
+                issues.append(
+                    f"{u.ingredient_name} (SAFETY HOLD; sisa bersih {eff_g / 1000.0:.2f} kg, butuh {u.used_raw_g / 1000.0:.2f} kg)"
+                )
+            else:
+                issues.append(
+                    f"{u.ingredient_name} (butuh {u.used_raw_g / 1000.0:.2f} kg, siap pakai tersisa {eff_g / 1000.0:.2f} kg)"
+                )
+
+    if issues or not service_dates or not stock_ctx.usable_stock_by_day:
+        return issues
+
+    # Per-service-date FEFO suffix verification: demand on days d..T <= stock still unexpired on day d
+    run_assigns = list(
+        session.execute(
+            select(RunAssignmentORM).where(RunAssignmentORM.run_id == run_id)
+        )
+        .scalars()
+        .all()
+    )
+    if not run_assigns:
+        return issues
+
+    recipe_ids = {a.recipe_id for a in run_assigns}
+    recipes = list(
+        session.execute(
+            select(RecipeVariantORM).where(RecipeVariantORM.id.in_(recipe_ids))
+        )
+        .scalars()
+        .all()
+    )
+    ing_ids = {ri.ingredient_id for r in recipes for ri in r.ingredients}
+    ing_rows = (
+        list(
+            session.execute(select(IngredientORM).where(IngredientORM.id.in_(ing_ids)))
+            .scalars()
+            .all()
+        )
+        if ing_ids
+        else []
+    )
+    code_by_ing_id = {i.id: i.code for i in ing_rows}
+    for i in ing_rows:
+        name_by_code.setdefault(i.code, i.name)
+    rec_ings_by_id: Dict[str, List[Tuple[str, float]]] = {}
+    for r in recipes:
+        rec_ings_by_id[r.id] = [
+            (code_by_ing_id[ri.ingredient_id], float(ri.raw_g_per_serving))
+            for ri in r.ingredients
+            if ri.ingredient_id in code_by_ing_id
+        ]
+
+    day_usage: Dict[int, Dict[str, float]] = {}
+    for a in run_assigns:
+        bucket = day_usage.setdefault(int(a.day_index), {})
+        for code, raw_g in rec_ings_by_id.get(a.recipe_id, []):
+            bucket[code] = bucket.get(code, 0.0) + raw_g * servings_per_day
+
+    horizon = len(service_dates)
+    for d_idx in range(1, horizon + 1):
+        day_cap = stock_ctx.usable_stock_by_day.get(d_idx, {})
+        suffix_need: Dict[str, float] = {}
+        for k in range(d_idx, horizon + 1):
+            for code, g in day_usage.get(k, {}).items():
+                suffix_need[code] = suffix_need.get(code, 0.0) + g
+        for code, need_g in sorted(suffix_need.items()):
+            cap_g = day_cap.get(code)
+            if cap_g is None or cap_g + 1e-6 < need_g:
+                avail_kg = 0.0 if cap_g is None else cap_g / 1000.0
+                issues.append(
+                    f"{name_by_code.get(code, code)} pada {service_dates[d_idx - 1].isoformat()} "
+                    f"(kedaluwarsa/terpakai; butuh {need_g / 1000.0:.2f} kg, layak pakai {avail_kg:.2f} kg)"
+                )
+    return issues
 
 
 def _utcnow() -> datetime:
@@ -69,15 +225,22 @@ def derive_production_scope(
     batch_label: Optional[str] = None,
 ) -> ProductionScopeInfo:
     """Compute a deterministic, collision-safe operational scope for uniqueness."""
-    prod_dt = scenario.production_date or scenario.created_at
-    prod_date = prod_dt.date() if isinstance(prod_dt, datetime) else prod_dt
+    svc_dates = extract_scenario_service_dates(scenario)
+    if svc_dates:
+        prod_date = svc_dates[0]
+        horizon_days = len(svc_dates)
+    else:
+        prod_dt = scenario.production_date or scenario.created_at
+        prod_date = prod_dt.date() if isinstance(prod_dt, datetime) else prod_dt
+        horizon_days = int(scenario.days)
+        svc_dates = default_weekdays(prod_date, horizon_days)
     target = session.get(NutritionTargetORM, scenario.target_id)
     cohort = (target.cohort if target else "DEFAULT").strip() or "DEFAULT"
     meal_type = (scenario.meal_type or "lunch").strip().lower() or "lunch"
 
     if batch_label and batch_label.strip():
         batch = batch_label.strip()
-    elif scenario.production_date is None:
+    elif scenario.production_date is None and not getattr(scenario, "service_dates_json", None):
         # Unscheduled legacy/test runs isolate by root scenario lineage so separate tests remain independent
         # while clones/recovery runs of the same baseline still share a single unique scope.
         root_id = _root_scenario_id(session, scenario)
@@ -86,13 +249,19 @@ def derive_production_scope(
         batch = "DEFAULT"
 
     scope_key = f"{scenario.kitchen_id or 'NONE'}|{prod_date.isoformat()}|{meal_type}|{cohort}|{batch}"
-    scope_label = f"{prod_date.isoformat()} • {meal_type} • {cohort}" + (
+    period_text = (
+        f"{svc_dates[0].isoformat()} s.d. {svc_dates[-1].isoformat()}"
+        if len(svc_dates) > 1
+        else prod_date.isoformat()
+    )
+    scope_label = f"{period_text} • {meal_type} • {cohort}" + (
         f" • {batch}" if batch != "DEFAULT" else ""
     )
     return ProductionScopeInfo(
         kitchen_id=UUID(scenario.kitchen_id),
         production_date=prod_date,
-        horizon_days=int(scenario.days),
+        horizon_days=horizon_days,
+        service_dates=svc_dates,
         meal_type=meal_type,
         target_cohort=cohort,
         batch_label=batch,
@@ -105,13 +274,18 @@ def _to_assignment_response(
     session: Session,
     row: OperationalPlanAssignmentORM,
     *,
-    live_sha_cache: Optional[Dict[Tuple[str, str, date], Tuple[str, bool]]] = None,
+    live_sha_cache: Optional[Dict[Tuple[str, str, str], Tuple[str, bool]]] = None,
 ) -> OperationalPlanAssignmentResponse:
     rev = session.get(MenuReviewRecordORM, row.menu_review_id)
     run = session.get(OptimizationRunORM, row.run_id)
     sc = session.get(ScenarioORM, row.scenario_id)
 
-    horizon = int(row.horizon_days or (sc.days if sc else 5))
+    svc_dates = extract_assignment_service_dates(row)
+    period_start = svc_dates[0] if svc_dates else row.production_date
+    period_end = svc_dates[-1] if svc_dates else row.production_date
+    derived_phase = derive_period_phase(svc_dates)
+
+    horizon = int(len(svc_dates) if svc_dates else (row.horizon_days or (sc.days if sc else 5)))
     servings_per_day = int(sc.servings_per_day if sc else 100)
     total_servings = max(1, horizon * servings_per_day)
 
@@ -140,49 +314,38 @@ def _to_assignment_response(
     scope_key = (
         f"{row.kitchen_id}|{row.production_date.isoformat()}|{row.meal_type}|{row.target_cohort}|{row.batch_label}"
     )
-    scope_label = f"{row.production_date.isoformat()} • {row.meal_type} • {row.target_cohort}" + (
+    period_text = (
+        f"{period_start.isoformat()} s.d. {period_end.isoformat()}"
+        if period_start != period_end
+        else row.production_date.isoformat()
+    )
+    scope_label = f"{period_text} • {row.meal_type} • {row.target_cohort}" + (
         f" • {row.batch_label}" if row.batch_label and row.batch_label != "DEFAULT" else ""
     )
 
     is_stale = False
     has_live_shortage = False
-    cache_key = (row.kitchen_id, row.dataset_version_id, row.production_date)
+    cache_key = (row.kitchen_id, row.dataset_version_id, row.id)
     if row.operational_status in {"ACTIVE", "ON_HOLD"}:
         if live_sha_cache is not None and cache_key in live_sha_cache:
             live_sha, has_live_shortage = live_sha_cache[cache_key]
         else:
-            prod_dt = datetime(
-                row.production_date.year,
-                row.production_date.month,
-                row.production_date.day,
-                8,
-                0,
-                tzinfo=timezone.utc,
-            )
-            avail = compute_usable_inventory(
+            stock_ctx = compute_cross_period_stock_context(
                 session,
                 kitchen_id=UUID(row.kitchen_id),
                 dataset_version_id=UUID(row.dataset_version_id),
-                production_date=prod_dt,
+                service_dates=svc_dates,
+                exclude_assignment_ids={row.id},
             )
-            live_sha = compute_usable_inventory_sha256(avail)
-            avail_by_code = {i.ingredient_code: i for i in avail.items}
-            usages = list(
-                session.execute(
-                    select(RunMaterialUsageORM).where(RunMaterialUsageORM.run_id == row.run_id)
-                )
-                .scalars()
-                .all()
+            live_sha = compute_usable_inventory_sha256(stock_ctx.base_availability)
+            issues = check_run_stock_feasibility_across_dates(
+                session,
+                run_id=row.run_id,
+                servings_per_day=servings_per_day,
+                service_dates=svc_dates,
+                stock_ctx=stock_ctx,
             )
-            for u in usages:
-                item = avail_by_code.get(u.ingredient_code)
-                if (
-                    item is None
-                    or item.usable_raw_g is None
-                    or item.usable_raw_g + 1e-6 < u.used_raw_g
-                ):
-                    has_live_shortage = True
-                    break
+            has_live_shortage = len(issues) > 0
             if live_sha_cache is not None:
                 live_sha_cache[cache_key] = (live_sha, has_live_shortage)
         if row.inventory_snapshot_sha256 and live_sha != row.inventory_snapshot_sha256:
@@ -205,6 +368,10 @@ def _to_assignment_response(
         operational_status=op_status,
         production_date=row.production_date,
         horizon_days=horizon,
+        service_dates=svc_dates,
+        period_start_date=period_start,
+        period_end_date=period_end,
+        derived_period_phase=derived_phase,
         meal_type=row.meal_type,
         target_cohort=row.target_cohort,
         batch_label=row.batch_label,
@@ -260,7 +427,7 @@ def list_operational_plan_assignments(
             OperationalPlanAssignmentORM.operational_status.in_(["ACTIVE", "ON_HOLD"])
         )
     rows = list(session.execute(stmt).scalars().all())
-    cache: Dict[Tuple[str, str, date], Tuple[str, bool]] = {}
+    cache: Dict[Tuple[str, str, str], Tuple[str, bool]] = {}
     return [_to_assignment_response(session, r, live_sha_cache=cache) for r in rows]
 
 
@@ -283,7 +450,13 @@ def get_review_operational_state_map(
     )
     out: Dict[str, Tuple[OperationalPlanAssignmentORM, str]] = {}
     for row in rows:
-        label = f"{row.production_date.isoformat()} • {row.meal_type} • {row.target_cohort}" + (
+        svc_dates = extract_assignment_service_dates(row)
+        p_txt = (
+            f"{svc_dates[0].isoformat()} s.d. {svc_dates[-1].isoformat()}"
+            if len(svc_dates) > 1
+            else row.production_date.isoformat()
+        )
+        label = f"{p_txt} • {row.meal_type} • {row.target_cohort}" + (
             f" • {row.batch_label}" if row.batch_label and row.batch_label != "DEFAULT" else ""
         )
         out[row.menu_review_id] = (row, label)
@@ -295,35 +468,74 @@ def get_effective_operational_plan(
     kitchen_id: UUID,
     *,
     production_date: Optional[date] = None,
+    service_date: Optional[date] = None,
     meal_type: Optional[str] = None,
     target_cohort: Optional[str] = None,
     batch_label: Optional[str] = None,
     dataset_version_id: Optional[UUID] = None,
 ) -> EffectiveOperationalPlanResponse:
-    """Authoritative single source of truth resolving the effective operational plan for a scope."""
-    stmt = (
-        select(OperationalPlanAssignmentORM)
-        .where(OperationalPlanAssignmentORM.kitchen_id == str(kitchen_id))
-        .order_by(
-            OperationalPlanAssignmentORM.production_date.desc(),
-            OperationalPlanAssignmentORM.updated_at.desc(),
-            OperationalPlanAssignmentORM.activated_at.desc(),
-        )
-    )
-    if production_date is not None:
-        stmt = stmt.where(OperationalPlanAssignmentORM.production_date == production_date)
-    if meal_type is not None:
-        stmt = stmt.where(OperationalPlanAssignmentORM.meal_type == meal_type.strip().lower())
-    if target_cohort is not None:
-        stmt = stmt.where(OperationalPlanAssignmentORM.target_cohort == target_cohort.strip())
-    if batch_label is not None:
-        stmt = stmt.where(OperationalPlanAssignmentORM.batch_label == batch_label.strip())
-    if dataset_version_id is not None:
-        stmt = stmt.where(
-            OperationalPlanAssignmentORM.dataset_version_id == str(dataset_version_id)
-        )
+    """Authoritative single source of truth resolving the effective operational plan for a scope or service_date."""
+    matched_day_by_assign: Dict[str, int] = {}
 
-    assignments = list(session.execute(stmt).scalars().all())
+    if service_date is not None:
+        sd_stmt = (
+            select(OperationalPlanServiceDateORM, OperationalPlanAssignmentORM)
+            .join(
+                OperationalPlanAssignmentORM,
+                OperationalPlanServiceDateORM.assignment_id == OperationalPlanAssignmentORM.id,
+            )
+            .where(
+                OperationalPlanServiceDateORM.kitchen_id == str(kitchen_id),
+                OperationalPlanServiceDateORM.service_date == service_date,
+            )
+            .order_by(
+                OperationalPlanAssignmentORM.updated_at.desc(),
+                OperationalPlanAssignmentORM.activated_at.desc(),
+            )
+        )
+        if meal_type is not None:
+            sd_stmt = sd_stmt.where(
+                OperationalPlanServiceDateORM.meal_type == meal_type.strip().lower()
+            )
+        if target_cohort is not None:
+            sd_stmt = sd_stmt.where(
+                OperationalPlanServiceDateORM.target_cohort == target_cohort.strip()
+            )
+        if batch_label is not None:
+            sd_stmt = sd_stmt.where(
+                OperationalPlanServiceDateORM.batch_label == batch_label.strip()
+            )
+        if dataset_version_id is not None:
+            sd_stmt = sd_stmt.where(
+                OperationalPlanAssignmentORM.dataset_version_id == str(dataset_version_id)
+            )
+        sd_pairs = list(session.execute(sd_stmt).all())
+        assignments = [a for _sd, a in sd_pairs]
+        for sd_row, a_row in sd_pairs:
+            matched_day_by_assign[a_row.id] = int(sd_row.day_index)
+    else:
+        stmt = (
+            select(OperationalPlanAssignmentORM)
+            .where(OperationalPlanAssignmentORM.kitchen_id == str(kitchen_id))
+            .order_by(
+                OperationalPlanAssignmentORM.production_date.desc(),
+                OperationalPlanAssignmentORM.updated_at.desc(),
+                OperationalPlanAssignmentORM.activated_at.desc(),
+            )
+        )
+        if production_date is not None:
+            stmt = stmt.where(OperationalPlanAssignmentORM.production_date == production_date)
+        if meal_type is not None:
+            stmt = stmt.where(OperationalPlanAssignmentORM.meal_type == meal_type.strip().lower())
+        if target_cohort is not None:
+            stmt = stmt.where(OperationalPlanAssignmentORM.target_cohort == target_cohort.strip())
+        if batch_label is not None:
+            stmt = stmt.where(OperationalPlanAssignmentORM.batch_label == batch_label.strip())
+        if dataset_version_id is not None:
+            stmt = stmt.where(
+                OperationalPlanAssignmentORM.dataset_version_id == str(dataset_version_id)
+            )
+        assignments = list(session.execute(stmt).scalars().all())
 
     rev_stmt = select(MenuReviewRecordORM).where(
         MenuReviewRecordORM.kitchen_id == str(kitchen_id)
@@ -333,6 +545,14 @@ def get_effective_operational_plan(
             MenuReviewRecordORM.dataset_version_id == str(dataset_version_id)
         )
     reviews = list(session.execute(rev_stmt).scalars().all())
+    if service_date is not None:
+        filtered_reviews: List[MenuReviewRecordORM] = []
+        for r in reviews:
+            sc_r = session.get(ScenarioORM, r.scenario_id)
+            if sc_r is not None and service_date in extract_scenario_service_dates(sc_r):
+                filtered_reviews.append(r)
+        reviews = filtered_reviews
+
     assigned_review_ids = {a.menu_review_id for a in assignments}
 
     approved_unassigned = [
@@ -350,9 +570,8 @@ def get_effective_operational_plan(
     held_row = next((a for a in effective_rows if a.operational_status == "ON_HOLD"), None)
     active_row = next((a for a in effective_rows if a.operational_status == "ACTIVE"), None)
 
-    # Prefer the most recently updated effective record if both an ON_HOLD and an unrelated scope ACTIVE exist
     primary_row = effective_rows[0] if effective_rows else None
-    cache: Dict[Tuple[str, str, date], Tuple[str, bool]] = {}
+    cache: Dict[Tuple[str, str, str], Tuple[str, bool]] = {}
 
     if primary_row is not None and primary_row.operational_status == "ON_HOLD":
         held_resp = _to_assignment_response(session, primary_row, live_sha_cache=cache)
@@ -364,6 +583,8 @@ def get_effective_operational_plan(
                 f"Rencana '{held_resp.plan_title}' sedang DITAHAN (ON_HOLD) terkait insiden bahan pangan "
                 f"dan tidak boleh dijalankan hingga rencana pengganti diaktifkan."
             ),
+            queried_service_date=service_date,
+            matched_day_index=matched_day_by_assign.get(primary_row.id),
             active_plan=_to_assignment_response(session, active_row, live_sha_cache=cache)
             if active_row and active_row.id != primary_row.id
             else None,
@@ -385,6 +606,8 @@ def get_effective_operational_plan(
                 if not active_resp.is_stale_inventory
                 else f"Rencana aktif '{active_resp.plan_title}' membutuhkan peninjauan stok/insiden."
             ),
+            queried_service_date=service_date,
+            matched_day_index=matched_day_by_assign.get(active_row.id),
             active_plan=active_resp,
             held_plan=_to_assignment_response(session, held_row, live_sha_cache=cache)
             if held_row
@@ -403,6 +626,7 @@ def get_effective_operational_plan(
             status_message=(
                 "Terdapat rencana yang telah disetujui secara historis tetapi belum diaktifkan pada cakupan operasional ini."
             ),
+            queried_service_date=service_date,
             approved_pending_activation=approved_unassigned,
             superseded_plans_count=len(superseded_rows),
             draft_plans_count=draft_count,
@@ -415,6 +639,7 @@ def get_effective_operational_plan(
             state=OperationalPlanStateEnum.SUPERSEDED,
             is_ready_for_execution=False,
             status_message="Seluruh rencana pada cakupan ini berstatus digantikan (SUPERSEDED).",
+            queried_service_date=service_date,
             superseded_plans_count=len(superseded_rows),
             draft_plans_count=draft_count,
             historical_approved_count=historical_approved_count,
@@ -426,6 +651,7 @@ def get_effective_operational_plan(
             state=OperationalPlanStateEnum.DRAFT,
             is_ready_for_execution=False,
             status_message="Baru tersedia draft / pengajuan menunggu persetujuan Kepala Dapur.",
+            queried_service_date=service_date,
             draft_plans_count=draft_count,
             historical_approved_count=historical_approved_count,
         )
@@ -434,7 +660,12 @@ def get_effective_operational_plan(
         kitchen_id=kitchen_id,
         state=OperationalPlanStateEnum.NO_PLAN,
         is_ready_for_execution=False,
-        status_message="Belum ada rencana operasional pada cakupan dapur yang dipilih.",
+        status_message=(
+            f"Belum ada rencana operasional aktif untuk tanggal pelayanan {service_date.isoformat()}."
+            if service_date is not None
+            else "Belum ada rencana operasional pada cakupan dapur yang dipilih."
+        ),
+        queried_service_date=service_date,
         historical_approved_count=historical_approved_count,
     )
 
@@ -496,15 +727,64 @@ def activate_replacement_plan(
             detail="Hasil optimasi tidak layak atau gagal verifikasi sehingga tidak dapat diaktifkan.",
         )
 
-    # Validate snapshot freshness & verify no ingredient relies on safety-held or insufficient stock
-    prod_dt = scenario.production_date or scenario.created_at
-    avail = compute_usable_inventory(
+    scope = derive_production_scope(session, scenario, batch_label=req.batch_label)
+    svc_dates = scope.service_dates or extract_scenario_service_dates(scenario) or default_weekdays(
+        scope.production_date, scope.horizon_days
+    )
+
+    current_effective = session.execute(
+        select(OperationalPlanAssignmentORM).where(
+            OperationalPlanAssignmentORM.active_scope_key == scope.scope_key
+        )
+    ).scalar_one_or_none()
+
+    # Check date-level overlap against ANY other active/held operational plan on the same production scope
+    candidate_date_keys = [
+        _date_scope_key(
+            str(auth.kitchen_id),
+            svc_d,
+            scope.meal_type,
+            scope.target_cohort,
+            scope.batch_label,
+        )
+        for svc_d in svc_dates
+    ]
+    overlapping_sd_rows = list(
+        session.execute(
+            select(OperationalPlanServiceDateORM).where(
+                OperationalPlanServiceDateORM.active_date_scope_key.in_(candidate_date_keys)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    conflict_dates = sorted(
+        {
+            sd.service_date.isoformat()
+            for sd in overlapping_sd_rows
+            if current_effective is None or sd.assignment_id != current_effective.id
+        }
+    )
+    if conflict_dates:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Aktivasi diblokir: tanggal pelayanan tumpang tindih dengan rencana operasional aktif lain "
+                f"pada lingkup produksi yang sama ({', '.join(conflict_dates)}). "
+                "Dua rencana aktif tidak diperbolehkan mencakup tanggal dan lingkup produksi yang sama."
+            ),
+        )
+
+    # Validate snapshot freshness & re-verify full cross-period live stock + per-date FEFO expiry
+    excl_ids = {current_effective.id} if current_effective is not None else set()
+    stock_ctx = compute_cross_period_stock_context(
         session,
         kitchen_id=auth.kitchen_id,
         dataset_version_id=UUID(review.dataset_version_id),
-        production_date=prod_dt,
+        service_dates=svc_dates,
+        exclude_assignment_ids=excl_ids,
     )
-    live_sha = compute_usable_inventory_sha256(avail)
+    live_sha = compute_usable_inventory_sha256(stock_ctx.base_availability)
     if review.inventory_snapshot_sha256 and live_sha != review.inventory_snapshot_sha256:
         raise HTTPException(
             status_code=409,
@@ -514,42 +794,26 @@ def activate_replacement_plan(
             ),
         )
 
-    avail_by_code = {item.ingredient_code: item for item in avail.items}
-    usages = list(
-        session.execute(
-            select(RunMaterialUsageORM).where(RunMaterialUsageORM.run_id == run.id)
-        )
-        .scalars()
-        .all()
+    insufficient = check_run_stock_feasibility_across_dates(
+        session,
+        run_id=run.id,
+        servings_per_day=int(scenario.servings_per_day),
+        service_dates=svc_dates,
+        stock_ctx=stock_ctx,
     )
-    insufficient: List[str] = []
-    for u in usages:
-        item = avail_by_code.get(u.ingredient_code)
-        if item is None or item.usable_raw_g is None:
-            insufficient.append(f"{u.ingredient_name} (UNKNOWN/tidak tersedia)")
-        elif item.usable_raw_g + 1e-6 < u.used_raw_g:
-            insufficient.append(
-                f"{u.ingredient_name} (butuh {u.used_raw_g / 1000.0:.2f} kg, siap pakai {item.usable_raw_g / 1000.0:.2f} kg)"
-            )
     if insufficient:
         raise HTTPException(
             status_code=409,
             detail=(
-                "Rencana tidak dapat diaktifkan karena bahan masih kurang atau ditahan oleh insiden keselamatan: "
+                "Rencana tidak dapat diaktifkan karena stok aktual/kedaluwarsa pada periode pelayanan "
+                "tidak mencukupi atau sedang ditahan oleh insiden keselamatan: "
                 + "; ".join(insufficient)
             ),
         )
 
-    scope = derive_production_scope(session, scenario, batch_label=req.batch_label)
     now = _utcnow()
 
     try:
-        current_effective = session.execute(
-            select(OperationalPlanAssignmentORM).where(
-                OperationalPlanAssignmentORM.active_scope_key == scope.scope_key
-            )
-        ).scalar_one_or_none()
-
         if (
             req.expected_active_assignment_id is not None
             and current_effective is not None
@@ -585,6 +849,11 @@ def activate_replacement_plan(
                     status_code=409,
                     detail="Konflik perubahan status rencana aktif secara bersamaan. Silakan ulangi.",
                 )
+            session.execute(
+                update(OperationalPlanServiceDateORM)
+                .where(OperationalPlanServiceDateORM.assignment_id == current_effective.id)
+                .values(active_date_scope_key=None)
+            )
             session.flush()
             record_audit_event(
                 session,
@@ -609,7 +878,8 @@ def activate_replacement_plan(
             run_id=run.id,
             scenario_id=scenario.id,
             production_date=scope.production_date,
-            horizon_days=scope.horizon_days,
+            horizon_days=len(svc_dates),
+            service_dates_json=[d.isoformat() for d in svc_dates],
             meal_type=scope.meal_type,
             target_cohort=scope.target_cohort,
             batch_label=scope.batch_label,
@@ -629,6 +899,8 @@ def activate_replacement_plan(
         )
         session.add(new_assign)
         session.flush()
+        sync_assignment_service_dates(session, new_assign, svc_dates, is_effective=True)
+        session.flush()
 
         record_audit_event(
             session,
@@ -642,6 +914,7 @@ def activate_replacement_plan(
                 "menu_review_id": review.id,
                 "run_id": run.id,
                 "scope_key": scope.scope_key,
+                "service_dates": [d.isoformat() for d in svc_dates],
                 "supersedes_assignment_id": supersedes_id,
                 "notes": req.notes,
             },

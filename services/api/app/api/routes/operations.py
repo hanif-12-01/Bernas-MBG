@@ -26,6 +26,7 @@ router = APIRouter(prefix="/operational-plans", tags=["operational-plans"])
 @router.get("/effective", response_model=EffectiveOperationalPlanResponse)
 def api_get_effective_operational_plan(
     production_date: Optional[date] = None,
+    service_date: Optional[date] = None,
     meal_type: Optional[str] = None,
     target_cohort: Optional[str] = None,
     batch_label: Optional[str] = None,
@@ -39,6 +40,7 @@ def api_get_effective_operational_plan(
         session,
         kitchen_id=auth.kitchen_id,
         production_date=production_date,
+        service_date=service_date,
         meal_type=meal_type,
         target_cohort=target_cohort,
         batch_label=batch_label,

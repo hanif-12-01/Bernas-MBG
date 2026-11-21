@@ -78,6 +78,7 @@ def build_recipe_milp(
     target: NutritionTargetProfile,
     stock_raw_g: Dict[str, float],
     ingredients_by_code: Optional[Dict[str, Ingredient]] = None,
+    usable_stock_by_day: Optional[Dict[int, Dict[str, float]]] = None,
 ) -> BuiltMILPModel:
     """Build recipe-based binary MILP per 04_Engineering/MILP Mathematical Model.md."""
     eligible = filter_eligible_recipes(
@@ -179,6 +180,31 @@ def build_recipe_milp(
                 pulp.lpSum(usage_terms) <= available_g,
                 f"stock_{_sanitize_name(ing_code)}",
             )
+
+        # 5b. Per-date FEFO expiry suffix stock constraints:
+        # Cumulative demand on days k..T must not exceed verified clean stock still unexpired on day k.
+        if usable_stock_by_day is not None:
+            for d_start in days:
+                day_stock_map = usable_stock_by_day.get(d_start)
+                if day_stock_map is None or ing_code not in day_stock_map:
+                    continue
+                avail_from_d = day_stock_map[ing_code]
+                if not math.isfinite(avail_from_d) or avail_from_d < 0:
+                    raise ValueError(
+                        f"Invalid per-date stock value {avail_from_d!r} for ingredient '{ing_code}' on day {d_start}"
+                    )
+                suffix_terms = [
+                    scenario.servings_per_day * feat.raw_grams_by_ingredient[ing_code] * x[(k, rid)]
+                    for k in days
+                    if k >= d_start
+                    for rid, feat in eligible.items()
+                    if ing_code in feat.raw_grams_by_ingredient
+                ]
+                if suffix_terms:
+                    prob += (
+                        pulp.lpSum(suffix_terms) <= avail_from_d,
+                        f"stock_expiry_d{d_start}_{_sanitize_name(ing_code)}",
+                    )
 
     # 6. Repeat cap per recipe family across plan horizon
     families: Dict[str, List[UUID]] = {}

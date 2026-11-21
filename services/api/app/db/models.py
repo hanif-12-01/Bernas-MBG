@@ -270,6 +270,12 @@ class ScenarioORM(Base):
     production_date: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    service_dates_json: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
+    continuation_of_run_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("optimization_runs.id", ondelete="SET NULL", use_alter=True, name="fk_scenarios_continuation_run"),
+        nullable=True,
+    )
     locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
@@ -281,7 +287,10 @@ class ScenarioORM(Base):
     stock_overrides: Mapped[List["ScenarioStockOverrideORM"]] = relationship(
         back_populates="scenario", cascade="all, delete-orphan"
     )
-    runs: Mapped[List["OptimizationRunORM"]] = relationship(back_populates="scenario")
+    runs: Mapped[List["OptimizationRunORM"]] = relationship(
+        back_populates="scenario",
+        foreign_keys="[OptimizationRunORM.scenario_id]",
+    )
 
     __table_args__ = (
         CheckConstraint("servings_per_day > 0", name="ck_sc_servings"),
@@ -362,7 +371,10 @@ class OptimizationRunORM(Base):
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
 
-    scenario: Mapped["ScenarioORM"] = relationship(back_populates="runs")
+    scenario: Mapped["ScenarioORM"] = relationship(
+        back_populates="runs",
+        foreign_keys="[OptimizationRunORM.scenario_id]",
+    )
     assignments: Mapped[List["RunAssignmentORM"]] = relationship(
         back_populates="run", cascade="all, delete-orphan"
     )
@@ -1448,6 +1460,7 @@ class OperationalPlanAssignmentORM(Base):
     )
     production_date: Mapped[date] = mapped_column(Date, nullable=False)
     horizon_days: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    service_dates_json: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True)
     meal_type: Mapped[str] = mapped_column(String(64), nullable=False, default="lunch")
     target_cohort: Mapped[str] = mapped_column(String(128), nullable=False, default="DEFAULT")
     batch_label: Mapped[str] = mapped_column(String(64), nullable=False, default="DEFAULT")
@@ -1492,6 +1505,42 @@ class OperationalPlanAssignmentORM(Base):
         ),
         Index("ix_op_plans_kitchen_status", "kitchen_id", "operational_status"),
         Index("ix_op_plans_review_id", "menu_review_id"),
+    )
+
+    service_date_rows: Mapped[List["OperationalPlanServiceDateORM"]] = relationship(
+        back_populates="assignment", cascade="all, delete-orphan"
+    )
+
+
+class OperationalPlanServiceDateORM(Base):
+    __tablename__ = "operational_plan_service_dates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    assignment_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("operational_plan_assignments.id", ondelete="CASCADE"), nullable=False
+    )
+    kitchen_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("kitchens.id", ondelete="CASCADE"), nullable=False
+    )
+    service_date: Mapped[date] = mapped_column(Date, nullable=False)
+    day_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    meal_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_cohort: Mapped[str] = mapped_column(String(128), nullable=False)
+    batch_label: Mapped[str] = mapped_column(String(64), nullable=False)
+    active_date_scope_key: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, unique=True
+    )
+
+    assignment: Mapped["OperationalPlanAssignmentORM"] = relationship(
+        back_populates="service_date_rows"
+    )
+
+    __table_args__ = (
+        CheckConstraint("day_index BETWEEN 1 AND 14", name="ck_op_service_date_day_idx"),
+        UniqueConstraint("assignment_id", "service_date", name="uq_op_service_dates_assign_date"),
+        UniqueConstraint("assignment_id", "day_index", name="uq_op_service_dates_assign_day"),
+        Index("ix_op_service_dates_kitchen_date", "kitchen_id", "service_date"),
+        Index("ix_op_service_dates_assignment", "assignment_id"),
     )
 
 

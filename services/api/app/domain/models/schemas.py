@@ -215,12 +215,29 @@ class ScenarioCreateRequest(BaseModel):
     excluded_allergens: List[str] = Field(default_factory=list)
     source_label: SourceTypeEnum = SourceTypeEnum.SYNTHETIC
     production_date: Optional[datetime] = None
+    service_dates: Optional[List[date]] = None
+    continuation_of_run_id: Optional[UUID] = None
 
     @field_validator("budget_idr_per_serving")
     @classmethod
     def check_budget_finite(cls, v: float) -> float:
         _ensure_finite(v, "budget_idr_per_serving")
         return v
+
+    @model_validator(mode="after")
+    def validate_service_dates(self) -> "ScenarioCreateRequest":
+        if self.service_dates is not None:
+            if not (1 <= len(self.service_dates) <= 14):
+                raise ValueError("service_dates harus berisi antara 1 hingga 14 tanggal pelayanan.")
+            if len(set(self.service_dates)) != len(self.service_dates):
+                raise ValueError("service_dates tidak boleh mengandung tanggal duplikat.")
+            sorted_dates = sorted(self.service_dates)
+            self.service_dates = sorted_dates
+            self.days = len(sorted_dates)
+            if self.production_date is None:
+                d0 = sorted_dates[0]
+                self.production_date = datetime(d0.year, d0.month, d0.day, 8, 0, tzinfo=timezone.utc)
+        return self
 
 
 class ScenarioCloneRequest(BaseModel):
@@ -273,6 +290,8 @@ class Scenario(BaseModel):
     stock_overrides_raw_g: Dict[str, float] = Field(default_factory=dict)
     source_label: SourceTypeEnum = SourceTypeEnum.SYNTHETIC
     production_date: Optional[datetime] = None
+    service_dates: List[date] = Field(default_factory=list)
+    continuation_of_run_id: Optional[UUID] = None
     locked: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -290,6 +309,7 @@ class RecipeFeatures(BaseModel):
 
 class DayPlan(BaseModel):
     day_index: int
+    service_date: Optional[date] = None
     recipes_by_slot: Dict[SlotEnum, UUID]
     recipe_names_by_slot: Dict[SlotEnum, str]
     daily_cost_idr_per_serving: float
@@ -332,10 +352,14 @@ class OptimizationRunResponse(BaseModel):
     objective_total_idr: Optional[float] = None
     cost_per_serving_average_idr: Optional[float] = None
     days_count: Optional[int] = None
+    service_dates: List[date] = Field(default_factory=list)
     servings_per_day: Optional[int] = None
     total_servings: Optional[int] = None
     total_menu_slots: Optional[int] = None
     cost_per_day_average_idr: Optional[float] = None
+    stock_confirmation_required: bool = False
+    stock_confirmation_reason: Optional[str] = None
+    history_context: Optional[Dict[str, Any]] = None
     best_bound: Optional[float] = None
     gap_abs: Optional[float] = None
     gap_rel: Optional[float] = None

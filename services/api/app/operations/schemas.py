@@ -28,6 +28,7 @@ class ProductionScopeInfo(BaseModel):
     kitchen_id: UUID
     production_date: date
     horizon_days: int
+    service_dates: List[date] = Field(default_factory=list)
     meal_type: str
     target_cohort: str
     batch_label: str
@@ -49,6 +50,10 @@ class OperationalPlanAssignmentResponse(BaseModel):
     operational_status: OperationalPlanStatusEnum
     production_date: date
     horizon_days: int
+    service_dates: List[date] = Field(default_factory=list)
+    period_start_date: Optional[date] = None
+    period_end_date: Optional[date] = None
+    derived_period_phase: Optional[str] = None  # IN_PROGRESS | UPCOMING | COMPLETED (derived from dates)
     meal_type: str
     target_cohort: str
     batch_label: str
@@ -79,6 +84,8 @@ class EffectiveOperationalPlanResponse(BaseModel):
     state: OperationalPlanStateEnum
     is_ready_for_execution: bool
     status_message: str
+    queried_service_date: Optional[date] = None
+    matched_day_index: Optional[int] = None
     active_plan: Optional[OperationalPlanAssignmentResponse] = None
     held_plan: Optional[OperationalPlanAssignmentResponse] = None
     approved_pending_activation: List[UUID] = Field(default_factory=list)

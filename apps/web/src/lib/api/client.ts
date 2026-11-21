@@ -33,9 +33,12 @@ import type {
   MenuReviewDecisionEnum,
   MenuReviewResponse,
   MenuReviewStatusEnum,
+  NextWeekDefaultsResponse,
   OperationalPlanAssignmentResponse,
   OptimizationRunResponse,
   PlannerDashboardSummary,
+  PrepareNextWeekRequest,
+  PrepareNextWeekResponse,
   PriceOverrideEntry,
   PurchaseDocumentCreateRequest,
   PurchaseDocumentResponse,
@@ -261,6 +264,26 @@ export const apiClient = {
       body: JSON.stringify(payload),
     }),
 
+  getNextWeekDefaults: (params?: { sourceRunId?: string; sourceAssignmentId?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.sourceRunId) sp.set("source_run_id", params.sourceRunId);
+    if (params?.sourceAssignmentId) sp.set("source_assignment_id", params.sourceAssignmentId);
+    const q = sp.toString();
+    return requestJson<NextWeekDefaultsResponse>(
+      `/scenarios/next-week-defaults${q ? `?${q}` : ""}`
+    );
+  },
+
+  prepareNextWeek: (payload: PrepareNextWeekRequest) =>
+    requestJson<PrepareNextWeekResponse>(
+      "/scenarios/prepare-next-week",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+      35000
+    ),
+
   cloneScenario: (scenarioId: string, name?: string) =>
     requestJson<Scenario>(`/scenarios/${scenarioId}/clone`, {
       method: "POST",
@@ -376,6 +399,7 @@ export const apiClient = {
     run_id: string;
     menu_review_id?: string | null;
     day_index: number;
+    service_date?: string | null;
     meal_batch_code?: string;
     qc_notes?: string;
     previous_inspection_id?: string;
@@ -552,6 +576,7 @@ export const apiClient = {
   getEffectiveOperationalPlan: (params?: {
     datasetVersionId?: string;
     productionDate?: string;
+    serviceDate?: string;
     mealType?: string;
     targetCohort?: string;
     batchLabel?: string;
@@ -559,6 +584,7 @@ export const apiClient = {
     const sp = new URLSearchParams();
     if (params?.datasetVersionId) sp.set("dataset_version_id", params.datasetVersionId);
     if (params?.productionDate) sp.set("production_date", params.productionDate);
+    if (params?.serviceDate) sp.set("service_date", params.serviceDate);
     if (params?.mealType) sp.set("meal_type", params.mealType);
     if (params?.targetCohort) sp.set("target_cohort", params.targetCohort);
     if (params?.batchLabel) sp.set("batch_label", params.batchLabel);

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import List, Optional
 from uuid import UUID, uuid4
 
@@ -16,6 +16,7 @@ from app.db.models import (
     MealBatchORM,
     MenuReviewRecordORM,
     OperationalPlanAssignmentORM,
+    OperationalPlanServiceDateORM,
     OptimizationRunORM,
     QCAIObservationORM,
     QCHumanReviewORM,
@@ -26,6 +27,7 @@ from app.db.models import (
     ScenarioORM,
     UserORM,
 )
+from app.operations.planning import extract_scenario_service_dates
 from app.reviews.schemas import MenuReviewStatusEnum
 from app.vision.comparator import compare_expected_menu_with_observations
 from app.vision.image_security import (
@@ -226,6 +228,21 @@ def _to_response(session: Session, row: QCInspectionORM) -> QCInspectionResponse
         else None
     )
 
+    resolved_service_date: Optional[date] = None
+    if op_row is not None:
+        sd_row = session.execute(
+            select(OperationalPlanServiceDateORM).where(
+                OperationalPlanServiceDateORM.assignment_id == op_row.id,
+                OperationalPlanServiceDateORM.day_index == row.day_index,
+            )
+        ).scalar_one_or_none()
+        if sd_row is not None:
+            resolved_service_date = sd_row.service_date
+    if resolved_service_date is None and sc is not None:
+        sc_dates = extract_scenario_service_dates(sc)
+        if 0 <= row.day_index - 1 < len(sc_dates):
+            resolved_service_date = sc_dates[row.day_index - 1]
+
     return QCInspectionResponse(
         id=UUID(row.id),
         kitchen_id=UUID(row.kitchen_id),
@@ -233,6 +250,7 @@ def _to_response(session: Session, row: QCInspectionORM) -> QCInspectionResponse
         run_id=UUID(row.run_id),
         scenario_name=sc.name if sc else f"Rencana {row.run_id[:8]}",
         day_index=row.day_index,
+        service_date=resolved_service_date,
         status=QCInspectionStatusEnum(row.status),
         review_outcome=QCReviewOutcomeEnum(row.review_outcome) if row.review_outcome else None,
         plan_operational_status=op_row.operational_status if op_row else None,
@@ -335,12 +353,12 @@ def create_inspection(
                     f"Pemeriksaan QC rutin diblokir: rencana '{ref.title}' berstatus SUPERSEDED karena telah digantikan rencana aktif terbaru."
                 ),
             )
-    elif ref.recovery_event_id is not None:
+    elif ref.recovery_event_id is not None or scenario.continuation_of_run_id is not None:
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Rencana pengganti '{ref.title}' sudah disetujui tetapi belum diaktifkan (APPROVED_NOT_ACTIVE). "
-                "Minta Kepala Dapur mengaktifkan rencana pengganti terlebih dahulu."
+                f"Rencana '{ref.title}' sudah disetujui tetapi belum diaktifkan (APPROVED_NOT_ACTIVE). "
+                "Minta Kepala Dapur mengaktifkan rencana terlebih dahulu sebelum pemeriksaan QC."
             ),
         )
     else:
@@ -355,6 +373,36 @@ def create_inspection(
                 status_code=409,
                 detail=(
                     f"Rencana '{ref.title}' bukan rencana operasional ACTIVE untuk lingkup {scope.scope_label}."
+                ),
+            )
+
+    if req.service_date is not None:
+        if op_row is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Rencana '{ref.title}' belum berstatus operasional ACTIVE untuk tanggal {req.service_date.isoformat()}."
+                ),
+            )
+        sd_row = session.execute(
+            select(OperationalPlanServiceDateORM).where(
+                OperationalPlanServiceDateORM.assignment_id == op_row.id,
+                OperationalPlanServiceDateORM.service_date == req.service_date,
+            )
+        ).scalar_one_or_none()
+        if sd_row is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Rencana operasional aktif '{ref.title}' tidak mencakup tanggal pelayanan {req.service_date.isoformat()}."
+                ),
+            )
+        if int(sd_row.day_index) != int(req.day_index):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Tanggal pelayanan {req.service_date.isoformat()} pada rencana '{ref.title}' "
+                    f"sesuai dengan Hari {sd_row.day_index}, bukan Hari {req.day_index}."
                 ),
             )
 
