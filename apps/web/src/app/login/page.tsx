@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AlertCircle, Loader2, LogIn, ShieldCheck, Sprout } from "lucide-react";
 
 import { DatasetSimulationNotice } from "@/components/ui/DatasetSimulationNotice";
+import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { useAuth } from "@/hooks/useAuth";
 import { ApiError } from "@/lib/api/client";
 
@@ -48,7 +49,10 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-[#F5F8F5] px-4 py-10">
+    <div className="relative flex min-h-screen flex-col items-center justify-center bg-[#F5F8F5] px-4 py-10">
+      <div className="absolute right-4 top-4">
+        <ThemeToggle />
+      </div>
       <div className="w-full max-w-md space-y-6">
         <div className="text-center">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#0F766E] text-white shadow-sm">

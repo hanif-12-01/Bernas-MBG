@@ -9,12 +9,22 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import AuthContext, record_audit_event, require_roles
+from app.auth.dependencies import (
+    AuthContext,
+    record_audit_event,
+    require_active_stock_custodian,
+    require_roles,
+)
 from app.auth.schemas import RoleEnum
 from app.db.models import DatasetSourceORM, IngredientMappingORM
 from app.db.repository import SQLiteVaultRepository
 from app.db.session import db_manager
 from app.ingestion.csv_parser import MAX_CSV_BYTES
+from app.inventory.adjustments import (
+    ManualStockAdjustmentRequest,
+    ManualStockAdjustmentResponse,
+    record_manual_inventory_adjustment,
+)
 from app.inventory.mapping import (
     ExternalProductCandidate,
     IngredientMappingReport,
@@ -309,7 +319,7 @@ async def import_inventory_transactions(
     authorization_confirmed: bool = Form(False),
     dry_run: bool = Form(False),
     source_name: str = Form("Unggahan Transaksi Inventaris Dapur", max_length=255),
-    auth: AuthContext = Depends(require_roles(RoleEnum.MENU_PLANNER)),
+    auth: AuthContext = Depends(require_active_stock_custodian),
     session: Session = Depends(_get_session),
 ) -> InventoryTransactionImportResponse:
     repo = SQLiteVaultRepository(session)
@@ -364,10 +374,22 @@ async def import_inventory_transactions(
     return result
 
 
+@router.post("/inventory/adjustments", response_model=ManualStockAdjustmentResponse)
+def api_record_manual_inventory_adjustment(
+    req: ManualStockAdjustmentRequest,
+    auth: AuthContext = Depends(require_active_stock_custodian),
+    session: Session = Depends(_get_session),
+) -> ManualStockAdjustmentResponse:
+    """Single-item ledger update (receipt, consumption, damage, opname, correction) for the active stock custodian only."""
+    return record_manual_inventory_adjustment(session, auth, req)
+
+
 @router.get("/inventory/templates/{template_name}")
 def download_inventory_template(
     template_name: str,
-    auth: AuthContext = Depends(require_roles(RoleEnum.KITCHEN_MANAGER, RoleEnum.MENU_PLANNER)),
+    auth: AuthContext = Depends(
+        require_roles(RoleEnum.KITCHEN_MANAGER, RoleEnum.MENU_PLANNER, RoleEnum.QC_OFFICER)
+    ),
 ) -> Response:
     _ = auth
     if template_name == "pilot-transactions":

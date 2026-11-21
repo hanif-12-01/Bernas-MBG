@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 
 import { DatasetSimulationNotice } from "@/components/ui/DatasetSimulationNotice";
+import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { ErrorState } from "@/components/feedback/FeedbackStates";
 import { useAuth } from "@/hooks/useAuth";
 import { useWorkspace } from "@/hooks/useWorkspace";
@@ -49,39 +50,41 @@ const ALL_NAV_ITEMS: NavItem[] = [
   },
   {
     href: "/kitchen-qc",
-    label: "Pemeriksaan Menu AI",
+    label: "Pemeriksaan Sajian",
     icon: Camera,
     allowedRoles: ["KITCHEN_MANAGER", "MENU_PLANNER", "QC_OFFICER"],
   },
   {
     href: "/simulator",
-    label: "Atasi Gangguan Bahan",
+    label: "Pemulihan & Simulasi",
     icon: SlidersHorizontal,
     allowedRoles: ["MENU_PLANNER"],
   },
   {
     href: "/inventory",
-    label: "Bahan & Stok",
+    label: "Stok Bahan",
     icon: Package,
-    allowedRoles: ["KITCHEN_MANAGER", "MENU_PLANNER"],
+    allowedRoles: ["KITCHEN_MANAGER", "MENU_PLANNER", "QC_OFFICER", "NUTRITIONIST"],
   },
   {
     href: "/shopping-list",
-    label: "Daftar Belanja",
+    label: "Belanja & Penerimaan",
     icon: ShoppingBasket,
-    allowedRoles: ["KITCHEN_MANAGER", "MENU_PLANNER"],
+    allowedRoles: ["KITCHEN_MANAGER", "MENU_PLANNER", "QC_OFFICER"],
   },
   {
     href: "/settings",
-    label: "Data & Pengaturan",
+    label: "Pengaturan",
     icon: Settings,
-    allowedRoles: ["KITCHEN_MANAGER", "MENU_PLANNER"],
+    allowedRoles: ["KITCHEN_MANAGER", "MENU_PLANNER", "QC_OFFICER"],
   },
 ];
 
 export function ScenarioSelector() {
+  const { user } = useAuth();
   const { runs, scenarios, selectedRunId, setSelectedRunId, isLoadingList } = useWorkspace();
   const scenarioById = new Map(scenarios.map((s) => [s.id, s]));
+  const canSeePrice = user?.active_role !== "QC_OFFICER";
 
   if (isLoadingList) {
     return (
@@ -112,7 +115,7 @@ export function ScenarioSelector() {
           const sc = scenarioById.get(run.scenario_id);
           const status = formatRunStatus(run.solver_status, run.validation_passed);
           const costPart =
-            run.cost_per_serving_average_idr !== null
+            canSeePrice && run.cost_per_serving_average_idr !== null
               ? ` • ${formatIDR(run.cost_per_serving_average_idr)}/porsi`
               : ` • ${status.shortLabel}`;
           return (
@@ -291,6 +294,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <span className="inline-flex rounded-full bg-[#EBF6F5] px-2 py-0.5 text-[11px] font-semibold text-[#0F766E]">
               {formatRoleLabel(user.active_role)}
             </span>
+            {user.active_role === "QC_OFFICER" && user.is_active_stock_custodian && (
+              <span className="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-900">
+                Pengelola Stok Aktif
+              </span>
+            )}
           </div>
           <p className="mt-1 truncate text-[11px] text-[#647A87]" title={user.active_kitchen_name}>
             {user.active_kitchen_name}
@@ -355,6 +363,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
         <DatasetSimulationNotice compact simulationOnly={health?.simulation_only ?? true} />
         {accountError && <p role="alert" className="break-words text-xs text-[#991B1B]">{accountError}</p>}
+        <ThemeToggle fullWidth />
         <button
           type="button"
           onClick={handleLogout}
@@ -430,7 +439,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}
           </div>
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <ThemeToggle compact />
             <button
               type="button"
               onClick={refreshAll}

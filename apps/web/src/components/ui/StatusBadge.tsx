@@ -10,11 +10,11 @@ interface StatusBadgeProps {
 }
 
 const TONE_CLASSES: Record<BadgeTone, string> = {
-  success: "bg-[#ECFDF3] text-[#166534] border-[#BBE9CC]",
-  warning: "bg-[#FEF6E7] text-[#8A5300] border-[#F5D59B]",
-  critical: "bg-[#FEF0F0] text-[#991B1B] border-[#F5C2C2]",
-  neutral: "bg-[#EEF3EE] text-[#4A6170] border-[#DCE6DE]",
-  teal: "bg-[#EBF6F5] text-[#0F766E] border-[#B5DFDA]",
+  success: "bg-[#ECFDF3] text-[#166534] border-[#BBE9CC] dark:bg-[#0D291A] dark:text-[#4ADE80] dark:border-[#1D5E3A]",
+  warning: "bg-[#FEF6E7] text-[#8A5300] border-[#F5D59B] dark:bg-[#2B1F0A] dark:text-[#FBBF24] dark:border-[#6E4A12]",
+  critical: "bg-[#FEF0F0] text-[#991B1B] border-[#F5C2C2] dark:bg-[#2D1216] dark:text-[#FB7185] dark:border-[#6E242C]",
+  neutral: "bg-[#EEF3EE] text-[#4A6170] border-[#DCE6DE] dark:bg-[#182630] dark:text-[#A3B7C4] dark:border-[#263845]",
+  teal: "bg-[#EBF6F5] text-[#0F766E] border-[#B5DFDA] dark:bg-[#102D2B] dark:text-[#5EEAD4] dark:border-[#1F5752]",
 };
 
 export function StatusBadge({ tone, label, size = "sm" }: StatusBadgeProps) {

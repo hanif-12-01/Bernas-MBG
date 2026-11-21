@@ -143,8 +143,17 @@ def test_role_permission_matrix_and_cross_kitchen_isolation() -> None:
         == 403
     )
 
-    # QC Officer A cannot view inventory, shopping list, export CSV, comparisons, or optimize (403)
-    assert qc_a.get("/api/v1/inventory").status_code == 403
+    # QC Officer A can inspect non-financial inventory availability (pricing & market references stripped!)
+    qc_inv = qc_a.get("/api/v1/inventory")
+    assert qc_inv.status_code == 200
+    assert all(
+        item.get("price_idr_per_g") is None
+        and item.get("original_price_value") is None
+        and item.get("price_provenance") is None
+        and item.get("market_references") == []
+        for item in qc_inv.json()["items"]
+    )
+    # QC Officer A cannot view financial shopping list, export CSV, comparisons, or optimize (403)
     assert qc_a.get(f"/api/v1/runs/{run_a_id}/shopping-list").status_code == 403
     assert qc_a.get(f"/api/v1/runs/{run_a_id}/export.csv").status_code == 403
     assert qc_a.post("/api/v1/scenarios", json={"name": "QC Blocked"}).status_code == 403

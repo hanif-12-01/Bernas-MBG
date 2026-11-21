@@ -10,8 +10,10 @@ import {
   Download,
   FileSpreadsheet,
   Loader2,
+  Moon,
   Server,
   ShieldCheck,
+  Sun,
   Upload,
 } from "lucide-react";
 
@@ -20,6 +22,7 @@ import { PageHeader } from "@/components/layout/AppShell";
 import { DatasetSimulationNotice } from "@/components/ui/DatasetSimulationNotice";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useAuth } from "@/hooks/useAuth";
+import { useTheme } from "@/hooks/useTheme";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { API_BASE_URL, apiClient, ApiError } from "@/lib/api/client";
 import { formatDateTimeID } from "@/lib/formatters/indonesian";
@@ -48,6 +51,7 @@ export default function SettingsPage() {
 
 function SettingsContent({ canImport }: { canImport: boolean }) {
   const qc = useQueryClient();
+  const { theme, setTheme } = useTheme();
   const { health, healthError, datasets, activeDataset } = useWorkspace();
 
   const [datasetName, setDatasetName] = useState("");
@@ -182,6 +186,48 @@ function SettingsContent({ canImport }: { canImport: boolean }) {
         subtitle="Kelola versi dataset bahan pangan, impor paket CSV tervalidasi, dan pantau status koneksi server backend."
         badges={<DatasetSimulationNotice compact simulationOnly={health?.simulation_only ?? true} />}
       />
+
+      {/* Appearance / Theme Selection Card */}
+      <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-[#DCE6DE] bg-white p-5">
+        <div>
+          <h2 className="text-base font-bold text-[#16354A]">Tema Tampilan Aplikasi</h2>
+          <p className="mt-0.5 text-xs text-[#647A87]">
+            Pilih mode terang (Light) atau mode gelap (Dark). Preferensi tersimpan otomatis di browser ini.
+          </p>
+        </div>
+        <div
+          role="group"
+          aria-label="Pilih tema tampilan"
+          className="inline-flex rounded-xl border border-[#DCE6DE] bg-[#F5F8F5] p-1"
+        >
+          <button
+            type="button"
+            onClick={() => setTheme("light")}
+            aria-pressed={theme === "light"}
+            className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-semibold transition-colors ${
+              theme === "light"
+                ? "bg-[#0F766E] text-white shadow-xs"
+                : "text-[#4A6170] hover:text-[#16354A]"
+            }`}
+          >
+            <Sun className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Terang (Light)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setTheme("dark")}
+            aria-pressed={theme === "dark"}
+            className={`inline-flex min-h-[40px] items-center gap-1.5 rounded-lg px-3.5 text-xs font-semibold transition-colors ${
+              theme === "dark"
+                ? "bg-[#0F766E] text-white shadow-xs"
+                : "text-[#4A6170] hover:text-[#16354A]"
+            }`}
+          >
+            <Moon className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>Gelap (Dark)</span>
+          </button>
+        </div>
+      </section>
 
       {/* Connection & Active Dataset Cards */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">

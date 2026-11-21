@@ -14,7 +14,7 @@ interface AuthContextValue {
   login: (username: string, password: string) => Promise<AuthUserResponse>;
   logout: () => Promise<void>;
   switchKitchen: (kitchenId: string) => Promise<AuthUserResponse>;
-  refreshAuth: () => Promise<void>;
+  refreshAuth: (silent?: boolean) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -25,9 +25,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
   const [authError, setAuthError] = useState<Error | null>(null);
 
-  const refreshAuth = useCallback(async () => {
-    setIsLoadingAuth(true);
-    setAuthError(null);
+  const refreshAuth = useCallback(async (silent = false) => {
+    if (!silent) {
+      setIsLoadingAuth(true);
+      setAuthError(null);
+    }
     try {
       const me = await apiClient.getMe();
       setUser(me);
@@ -35,9 +37,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
         setCsrfToken(null);
         setUser(null);
-      } else setAuthError(err instanceof Error ? err : new Error("Sesi belum dapat diperiksa."));
+      } else if (!silent) {
+        setAuthError(err instanceof Error ? err : new Error("Sesi belum dapat diperiksa."));
+      }
     } finally {
-      setIsLoadingAuth(false);
+      if (!silent) {
+        setIsLoadingAuth(false);
+      }
     }
   }, []);
 

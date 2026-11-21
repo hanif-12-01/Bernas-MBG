@@ -712,28 +712,39 @@ def save_human_observations_review(
             status_code=409,
             detail="Observasi tidak dapat diubah setelah pemeriksaan dikirim atau ditinjau.",
         )
-    if not row.images or not row.ai_observations:
+    latest_img = _latest_image(row)
+    if not row.images or latest_img is None:
         raise HTTPException(
             status_code=409,
-            detail="Jalankan analisis Vision AI terlebih dahulu sebelum menyimpan tinjauan manusia.",
+            detail="Unggah foto sajian terlebih dahulu sebelum menyimpan pemeriksaan manual.",
         )
 
-    latest_ai = max(row.ai_observations, key=lambda observation: (observation.created_at, observation.id))
-    if latest_ai.image_id != _latest_image(row).id or (
-        req.ai_observation_id is not None and str(req.ai_observation_id) != latest_ai.id
+    latest_ai = max(
+        row.ai_observations,
+        key=lambda observation: (observation.created_at, observation.id),
+        default=None,
+    )
+    matched_ai = (
+        latest_ai if (latest_ai is not None and latest_ai.image_id == latest_img.id) else None
+    )
+    if req.ai_observation_id is not None and (
+        matched_ai is None or str(req.ai_observation_id) != matched_ai.id
     ):
-        raise HTTPException(status_code=409, detail="Analisis foto sudah berubah. Periksa hasil foto terbaru.")
+        raise HTTPException(
+            status_code=409,
+            detail="Analisis foto sudah berubah. Periksa hasil foto terbaru.",
+        )
     allowed_slots = {slot.slot for slot in _load_expected_menu(session, row.run_id, row.day_index)}
     corrected_slots = {component.slot for component in req.corrected_components}
     if not corrected_slots <= allowed_slots or len(corrected_slots) != len(req.corrected_components):
         raise HTTPException(status_code=422, detail="Setiap komponen tinjauan harus unik dan termasuk dalam rencana.")
     now = datetime.now(timezone.utc)
 
-    # Preserve immutable original AI observation; store human review in separate append-only table
+    # Preserve optional original AI observation; store human review in separate append-only table
     human_review = QCHumanReviewORM(
         id=str(uuid4()),
         inspection_id=row.id,
-        ai_observation_id=latest_ai.id,
+        ai_observation_id=matched_ai.id if matched_ai is not None else None,
         reviewer_user_id=str(auth.user_id),
         corrected_components_json=[c.model_dump(mode="json") for c in req.corrected_components],
         notes=req.notes.strip() if req.notes else None,
@@ -759,7 +770,8 @@ def save_human_observations_review(
         actor_role=auth.role.value,
         metadata={
             "human_review_id": human_review.id,
-            "ai_observation_id": latest_ai.id,
+            "ai_observation_id": matched_ai.id if matched_ai is not None else None,
+            "manual_without_ai": matched_ai is None,
             "corrected_count": len(req.corrected_components),
             "request_retake": req.request_retake,
         },
@@ -798,16 +810,37 @@ def submit_inspection(
             ),
         )
 
-    latest_ai = max(row.ai_observations, key=lambda observation: (observation.created_at, observation.id), default=None)
-    latest_review = max(row.human_reviews, key=lambda review: (review.created_at, review.id), default=None)
+    latest_img = _latest_image(row)
+    latest_ai = max(
+        row.ai_observations,
+        key=lambda observation: (observation.created_at, observation.id),
+        default=None,
+    )
+    latest_review = max(
+        row.human_reviews,
+        key=lambda review: (review.created_at, review.id),
+        default=None,
+    )
     if (
         not row.images
-        or latest_ai is None
-        or latest_ai.image_id != _latest_image(row).id
+        or latest_img is None
         or latest_review is None
-        or latest_review.ai_observation_id != latest_ai.id
+        or latest_review.created_at < latest_img.created_at
     ):
-        raise HTTPException(status_code=409, detail="Tinjau hasil analisis foto terbaru sebelum mengirim laporan.")
+        raise HTTPException(
+            status_code=409,
+            detail="Tinjau hasil foto sajian terbaru sebelum mengirim laporan.",
+        )
+    if (
+        latest_ai is not None
+        and latest_ai.image_id == latest_img.id
+        and latest_review.ai_observation_id is not None
+        and latest_review.ai_observation_id != latest_ai.id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Tinjau hasil analisis foto terbaru sebelum mengirim laporan.",
+        )
     now = datetime.now(timezone.utc)
     _update_inspection(
         session,

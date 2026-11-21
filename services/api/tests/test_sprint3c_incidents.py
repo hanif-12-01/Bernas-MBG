@@ -94,7 +94,7 @@ def _create_isolated_dataset_with_proteins(
         rows_csv.append(
             f"OPENING_BALANCE,C_ING{idx},LOT-T-{ds_id[:4]}-ING{idx},250,kg,2026-12-09T08:00:00Z,2027-06-01T00:00:00Z,IDEMP-{ds_id[:8]}-{idx}"
         )
-    imp_res = planner.post(
+    imp_res = make_authenticated_client("petugas_qc").post(
         "/api/v1/inventory/transactions/import",
         data={
             "dataset_version_id": ds_id,
@@ -355,12 +355,25 @@ def test_b_and_c_infeasibility_and_safety_hold_bypass_blocks():
         == 409
     )
 
-    # C4: Manager disposes lots -> REJECTED_DISPOSED stays permanently excluded (0 kg usable)
-    disp_res = manager.patch(
+    # C4: Two-step disposal: Manager authorizes disposal first (lots remain ON_HOLD until QC Custodian executes!)
+    auth_res = manager.patch(
         f"/api/v1/incidents/{inc_id}/status",
-        json={"status": "REJECTED", "notes": "Lot dimusnahkan sesuai SOP.", "dispose_held_lots": True},
+        json={"status": "REJECTED", "notes": "Otorisasi pemusnahan sesuai SOP.", "dispose_held_lots": True},
     )
-    assert disp_res.status_code == 200
+    assert auth_res.status_code == 200, auth_res.text
+    assert auth_res.json()["disposal_authorized"] is True
+    # Still ON_HOLD before physical disposal by QC Custodian
+    assert all(l["lot_safety_status"] == "ON_HOLD" for l in auth_res.json()["affected_lots"])
+    # Manager cannot mutate ledger directly via /record-disposal -> 403
+    assert manager.post(f"/api/v1/incidents/{inc_id}/record-disposal", json={}).status_code == 403
+
+    # Active Stock Custodian (QC) executes physical disposal -> REJECTED_DISPOSED stays permanently excluded (0 kg usable)
+    disp_res = qc.post(
+        f"/api/v1/incidents/{inc_id}/record-disposal",
+        json={"notes": "Lot dimusnahkan oleh Petugas QC Pengelola Stok sesuai otorisasi Kepala Dapur."},
+    )
+    assert disp_res.status_code == 200, disp_res.text
+    assert disp_res.json()["disposal_executed_at"] is not None
     assert all(l["lot_safety_status"] == "REJECTED_DISPOSED" for l in disp_res.json()["affected_lots"])
     cat_after = planner.get(f"/api/v1/inventory?dataset_version_id={ds_id}").json()
     c_ing3 = next(i for i in cat_after["items"] if i["code"] == "C_ING3")

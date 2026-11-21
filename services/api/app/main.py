@@ -6,7 +6,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import auth, comparisons, dashboards, datasets, health, incidents, inventory_ops, operations, qc, recovery, reviews, scenarios
+from app.api.routes import auth, comparisons, custodian, dashboards, datasets, health, incidents, inventory_ops, operations, procurement, qc, recovery, reviews, scenarios
 from app.api.upload_limit import UploadBodyLimitMiddleware
 from app.db.session import db_manager
 
@@ -47,12 +47,14 @@ app.add_middleware(
 
 app.include_router(health.router, prefix="/api/v1")
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(custodian.router, prefix="/api/v1")
 app.include_router(datasets.router, prefix="/api/v1")
 app.include_router(inventory_ops.router, prefix="/api/v1")
 app.include_router(scenarios.router, prefix="/api/v1")
 app.include_router(comparisons.router, prefix="/api/v1")
 app.include_router(reviews.router, prefix="/api/v1")
 app.include_router(operations.router, prefix="/api/v1")
+app.include_router(procurement.router, prefix="/api/v1")
 app.include_router(recovery.router, prefix="/api/v1")
 app.include_router(incidents.router, prefix="/api/v1")
 app.include_router(qc.router, prefix="/api/v1")

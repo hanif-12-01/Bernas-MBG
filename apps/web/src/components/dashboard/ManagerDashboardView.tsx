@@ -12,10 +12,12 @@ import {
   FileText,
   Package,
   ShieldAlert,
+  XCircle,
 } from "lucide-react";
 
+import { CustodianDelegationCard } from "@/components/custodian/CustodianDelegationCard";
 import { ErrorState, LoadingSkeleton } from "@/components/feedback/FeedbackStates";
-import { IncidentPanel } from "@/components/incidents/IncidentPanel";
+import { ManagerIncidentReviewList } from "@/components/incidents/ManagerIncidentReviewList";
 import { PageHeader } from "@/components/layout/AppShell";
 import { RecoveryReviewSummaryCard } from "@/components/recovery/RecoveryReviewSummaryCard";
 import { DatasetSimulationNotice } from "@/components/ui/DatasetSimulationNotice";
@@ -32,6 +34,7 @@ import {
   formatQCStatus,
   formatWeightFromGrams,
 } from "@/lib/formatters/indonesian";
+import { formatJakartaDate } from "@/lib/formatters/jakartaDate";
 import type { MenuReviewDecisionEnum } from "@/types/api";
 
 export function ManagerDashboardView() {
@@ -94,10 +97,47 @@ export function ManagerDashboardView() {
     },
   });
 
+  const reviewPurchaseMutation = useMutation({
+    mutationFn: ({
+      docId,
+      decision,
+    }: {
+      docId: string;
+      decision: "VERIFIED_MATCH" | "DISCREPANCY_FLAGGED";
+    }) => apiClient.reviewPurchaseDocument(docId, { decision }),
+    onSuccess: (doc) => {
+      setActionError(null);
+      setActionSuccess(`Bukti pembelian "${doc.supplier_name}" ditandai ${doc.evidence_status}.`);
+      qc.invalidateQueries({ queryKey: ["manager-summary"] });
+      qc.invalidateQueries({ queryKey: ["purchase-documents"] });
+    },
+    onError: (err) => {
+      setActionError(err instanceof ApiError ? err.message : "Gagal meninjau bukti pembelian.");
+    },
+  });
+
+  const reviewQCMutation = useMutation({
+    mutationFn: (inspectionId: string) =>
+      apiClient.reviewQCInspection(
+        inspectionId,
+        "ACCEPTED_FOR_RECORD",
+        "Ditinjau dan diterima Kepala Dapur dari Ringkasan Tugas."
+      ),
+    onSuccess: () => {
+      setActionError(null);
+      setActionSuccess("Laporan Pemeriksaan Sajian ditandai Selesai Ditinjau.");
+      qc.invalidateQueries({ queryKey: ["manager-summary"] });
+      qc.invalidateQueries({ queryKey: ["qc-inspections"] });
+    },
+    onError: (err) => {
+      setActionError(err instanceof ApiError ? err.message : "Gagal meninjau pemeriksaan sajian.");
+    },
+  });
+
   if (summaryQuery.isLoading) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Ringkasan Kepala Dapur" subtitle="Memuat ringkasan operasional dapur..." />
+        <PageHeader title="Beranda Kepala Dapur" subtitle="Memuat antrean tinjauan, penugasan stok, dan persetujuan operasional..." />
         <LoadingSkeleton rows={4} />
       </div>
     );
@@ -106,7 +146,7 @@ export function ManagerDashboardView() {
   if (summaryQuery.error || !summaryQuery.data) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Ringkasan Kepala Dapur" />
+        <PageHeader title="Beranda Kepala Dapur" />
         <ErrorState
           message={summaryQuery.error?.message ?? "Gagal memuat ringkasan Kepala Dapur."}
           onRetry={() => summaryQuery.refetch()}
@@ -116,27 +156,27 @@ export function ManagerDashboardView() {
   }
 
   const data = summaryQuery.data;
+  const pendingDocs = data.pending_purchase_documents ?? [];
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Ringkasan Kepala Dapur"
-        subtitle={`Pantau rencana menu menunggu persetujuan operasional, pemeriksaan visual QC, peringatan stok, dan riwayat audit untuk ${data.kitchen_name}.`}
-        badges={<DatasetSimulationNotice compact simulationOnly={data.simulation_only} />}
+        subtitle={`Kelola penugasan Pengelola Stok, tinjau rencana menu, otorisasi pemusnahan bahan, bukti pembelian, dan hasil Pemeriksaan Sajian untuk ${data.kitchen_name}.`}
         actions={
           <div className="flex flex-wrap gap-2">
             <Link
-              href="/kitchen-qc"
-              className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-[#0F766E] px-4 py-2 text-sm font-semibold text-white hover:bg-[#0B5F58]"
+              href="/shopping-list?tab=purchases"
+              className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-[#DCE6DE] bg-white px-4 py-2 text-sm font-semibold text-[#16354A] hover:bg-[#F5F8F5]"
             >
-              <Camera className="h-4 w-4" aria-hidden="true" />
-              <span>Tinjau Pemeriksaan</span>
+              <FileText className="h-4 w-4" aria-hidden="true" />
+              <span>Bukti Belanja</span>
             </Link>
             <Link
               href="/menu-planning"
               className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-[#DCE6DE] bg-white px-4 py-2 text-sm font-semibold text-[#16354A] hover:bg-[#F5F8F5]"
             >
-              <FileText className="h-4 w-4" aria-hidden="true" />
+              <ClipboardCheck className="h-4 w-4" aria-hidden="true" />
               <span>Lihat Rencana Menu</span>
             </Link>
           </div>
@@ -148,11 +188,11 @@ export function ManagerDashboardView() {
       {/* Top KPI Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <KPIStatCard
-          label="Biaya Rata-rata Rencana Terbaru"
+          label="Biaya Rata-rata Rencana"
           value={formatIDR(data.latest_cost_per_serving_idr)}
           helper={
             data.latest_total_cost_idr
-              ? `Total rencana: ${formatIDR(data.latest_total_cost_idr)}`
+              ? `Total: ${formatIDR(data.latest_total_cost_idr)}`
               : "Belum ada rencana layak"
           }
           icon={<ClipboardCheck className="h-5 w-5" aria-hidden="true" />}
@@ -160,23 +200,29 @@ export function ManagerDashboardView() {
         <KPIStatCard
           label="Rencana Menunggu Tinjauan"
           value={`${data.pending_menu_reviews.length}`}
-          helper={`${data.approved_menu_reviews_count} rencana telah disetujui operasional`}
+          helper={`${data.approved_menu_reviews_count} rencana telah disetujui`}
           accent={data.pending_menu_reviews.length > 0 ? "warning" : "default"}
           icon={<Clock className="h-5 w-5" aria-hidden="true" />}
         />
         <KPIStatCard
-          label="Pemeriksaan QC Menunggu Tinjauan"
-          value={`${data.pending_qc_inspections.length}`}
-          helper="Laporan foto & koreksi dari Petugas QC"
-          accent={data.pending_qc_inspections.length > 0 ? "warning" : "default"}
-          icon={<Camera className="h-5 w-5" aria-hidden="true" />}
+          label="Bukti Belanja & Pemusnahan"
+          value={`${(data.pending_purchase_evidence_count ?? 0) + (data.pending_disposal_authorizations_count ?? 0)}`}
+          helper={`${data.pending_purchase_evidence_count ?? 0} bukti belanja · ${data.pending_disposal_authorizations_count ?? 0} insiden`}
+          accent={
+            (data.pending_purchase_evidence_count ?? 0) +
+              (data.pending_disposal_authorizations_count ?? 0) >
+            0
+              ? "warning"
+              : "default"
+          }
+          icon={<ShieldAlert className="h-5 w-5" aria-hidden="true" />}
         />
         <KPIStatCard
-          label="Temuan Visual Perlu Perhatian"
-          value={`${data.qc_discrepancies_count}`}
-          helper="Inspeksi dengan komponen belum terlihat/tidak pasti"
-          accent={data.qc_discrepancies_count > 0 ? "warning" : "default"}
-          icon={<ShieldAlert className="h-5 w-5" aria-hidden="true" />}
+          label="Pemeriksaan Sajian Baru"
+          value={`${data.pending_qc_inspections.length}`}
+          helper="Foto sajian menunggu tinjauan"
+          accent={data.pending_qc_inspections.length > 0 ? "warning" : "default"}
+          icon={<Camera className="h-5 w-5" aria-hidden="true" />}
         />
       </div>
 
@@ -188,43 +234,20 @@ export function ManagerDashboardView() {
       )}
       {actionError && <ErrorState title="Tinjauan Gagal" message={actionError} />}
 
-      {(data.approved_plan_inventory_alerts?.length ?? 0) > 0 && (
-        <div
-          role="alert"
-          className="rounded-2xl border border-[#F3D19B] bg-[#FFFBEB] p-4 text-xs text-[#92400E]"
-        >
-          <p className="text-sm font-bold">
-            Rencana Disetujui Perlu Peninjauan Ulang ({data.approved_plan_inventory_alerts!.length})
-          </p>
-          <ul className="mt-1.5 space-y-1">
-            {data.approved_plan_inventory_alerts!.map((al) => (
-              <li key={al.menu_review_id}>
-                {al.summary_message}{" "}
-                <Link href={`/menu-planning?run=${al.run_id}`} className="font-bold underline">
-                  Buka Rencana
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {/* 1. Single Authoritative Stock Custodian Delegation */}
+      <CustodianDelegationCard />
 
-      {/* Effective Operational Plans + Pending Activation (Sprint 3B.1 / 3C) */}
+      {/* 2. Effective Operational Plans */}
       <section className="rounded-2xl border border-[#DCE6DE] bg-white p-5 shadow-[0_1px_2px_rgba(22,53,74,0.04)] space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#EEF3EE] pb-3">
           <div>
-            <h2 className="text-base font-bold text-[#16354A]">
-              Status Rencana Operasional Dapur
-            </h2>
+            <h2 className="text-base font-bold text-[#16354A]">Status Rencana Operasional Dapur</h2>
             <p className="text-xs text-[#647A87]">
-              Membedakan rencana yang benar-benar AKTIF/DITAHAN untuk eksekusi dari arsip persetujuan historis.
+              Rencana aktif atau tertahan saat ini.
             </p>
           </div>
           {(data.active_incidents_count ?? 0) > 0 && (
-            <StatusBadge
-              tone="critical"
-              label={`${data.active_incidents_count} insiden bahan aktif`}
-            />
+            <StatusBadge tone="critical" label={`${data.active_incidents_count} insiden bahan aktif`} />
           )}
         </div>
 
@@ -246,16 +269,13 @@ export function ManagerDashboardView() {
                   }`}
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-sm font-bold text-[#16354A] break-words">
-                      {op.plan_title}
-                    </span>
+                    <span className="text-sm font-bold text-[#16354A] break-words">{op.plan_title}</span>
                     <StatusBadge tone={st.tone} label={st.label} />
                   </div>
                   <p className="text-xs text-[#4A6170]">{op.scope_label}</p>
                   <p className="text-xs text-[#16354A] tabular-nums">
                     <strong>{op.horizon_days} hari</strong> × <strong>{op.servings_per_day} porsi/hari</strong>{" "}
                     = <strong>{op.total_servings.toLocaleString("id-ID")} total porsi</strong> •{" "}
-                    {op.total_menu_slots} slot hidangan • Total{" "}
                     <strong>{formatIDR(op.total_cost_idr)}</strong> ({formatIDR(op.cost_per_serving_idr)}/porsi)
                   </p>
                   {op.operational_status === "ON_HOLD" && op.hold_reason && (
@@ -272,7 +292,7 @@ export function ManagerDashboardView() {
         {(data.approved_awaiting_activation?.length ?? 0) > 0 && (
           <div className="space-y-2.5 rounded-xl border border-[#F3D19B] bg-[#FFFBEB] p-4">
             <h3 className="text-xs font-bold uppercase tracking-wide text-[#92400E]">
-              Rencana Pengganti Disetujui — Menunggu Aktivasi Operasional ({data.approved_awaiting_activation!.length})
+              Rencana Pengganti Disetujui — Menunggu Aktivasi ({data.approved_awaiting_activation!.length})
             </h3>
             {data.approved_awaiting_activation!.map((mr) => (
               <div
@@ -285,8 +305,6 @@ export function ManagerDashboardView() {
                     <StatusBadge tone="warning" label="Disetujui (Belum Aktif)" />
                   </div>
                   <p className="text-xs text-[#4A6170]">
-                    {mr.production_scope_label ?? `${mr.days_count} hari`} •{" "}
-                    {mr.total_servings ? `${mr.total_servings.toLocaleString("id-ID")} total porsi • ` : ""}
                     Total {formatIDR(mr.objective_total_idr)} ({formatIDR(mr.cost_per_serving_average_idr)}/porsi)
                   </p>
                 </div>
@@ -294,7 +312,7 @@ export function ManagerDashboardView() {
                   type="button"
                   disabled={activateMutation.isPending}
                   onClick={() => activateMutation.mutate(mr.id)}
-                  className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-2 rounded-xl bg-[#0F766E] px-4 py-2 text-xs font-bold text-white hover:bg-[#0B5F58] disabled:opacity-60"
+                  className="inline-flex min-h-[40px] shrink-0 items-center justify-center gap-2 rounded-xl bg-[#0F766E] px-4 py-2 text-xs font-bold text-white hover:bg-[#0B5F58] disabled:opacity-60"
                 >
                   <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
                   <span>Aktifkan Rencana Pengganti</span>
@@ -305,115 +323,84 @@ export function ManagerDashboardView() {
         )}
       </section>
 
-      <IncidentPanel compact />
+      {/* 3. Manager Incident Review & Disposal Authorization (NO incident report form!) */}
+      <ManagerIncidentReviewList />
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-        {/* Pending Menu Reviews */}
+        {/* 4. Pending Menu Reviews */}
         <section className="rounded-2xl border border-[#DCE6DE] bg-white p-5 shadow-[0_1px_2px_rgba(22,53,74,0.04)]">
           <div className="flex items-center justify-between gap-2 border-b border-[#EEF3EE] pb-3">
             <div>
-              <h2 className="text-base font-bold text-[#16354A]">
-                Rencana Menu Menunggu Peninjauan
-              </h2>
+              <h2 className="text-base font-bold text-[#16354A]">Rencana Menu Menunggu Persetujuan</h2>
               <p className="text-xs text-[#647A87]">
-                Persetujuan operasional internal saja — bukan validasi gizi ahli gizi/BGN.
+                Persetujuan operasional internal — bukan validasi klinis/BGN.
               </p>
             </div>
-            <StatusBadge
-              tone={data.pending_menu_reviews.length > 0 ? "warning" : "neutral"}
-              label={`${data.pending_menu_reviews.length} pengajuan`}
-            />
+            <Link href="/menu-planning" className="text-xs font-semibold text-[#0F766E] hover:underline">
+              Buka Rencana →
+            </Link>
           </div>
 
           {data.pending_menu_reviews.length === 0 ? (
-            <p className="py-8 text-center text-sm text-[#647A87]">
-              Tidak ada rencana menu yang menunggu tinjauan saat ini.
+            <p className="py-6 text-center text-sm text-[#647A87]">
+              Tidak ada rencana menu yang menunggu persetujuan.
             </p>
           ) : (
             <div className="mt-4 space-y-4">
-              {data.pending_menu_reviews.map((mr) => {
-                const st = formatMenuReviewStatus(mr.status);
-                const noteVal = notesByReview[mr.id] ?? "";
+              {data.pending_menu_reviews.map((rev) => {
+                const st = formatMenuReviewStatus(rev.status);
                 return (
-                  <div
-                    key={mr.id}
-                    className="rounded-xl border border-[#DCE6DE] bg-[#F5F8F5]/60 p-4 space-y-3"
-                  >
+                  <div key={rev.id} className="rounded-xl border border-[#DCE6DE] bg-[#F5F8F5]/60 p-4 space-y-3">
                     <div className="flex flex-wrap items-start justify-between gap-2">
                       <div>
-                        <h3 className="break-words text-sm font-bold text-[#16354A]">
-                          {mr.title} <span className="text-xs font-normal text-[#647A87]">(v{mr.version_number})</span>
-                        </h3>
-                        <p className="mt-0.5 text-xs text-[#4A6170]">
-                          Diajukan oleh {mr.submitted_by_name ?? mr.created_by_name} •{" "}
-                          {formatIDR(mr.cost_per_serving_average_idr)}/porsi • {mr.days_count} hari
+                        <span className="text-sm font-bold text-[#16354A]">{rev.title}</span>
+                        <p className="text-xs text-[#4A6170]">
+                          Oleh {rev.created_by_name} • {formatIDR(rev.cost_per_serving_average_idr)}/porsi
                         </p>
-                        {mr.planner_notes && (
-                          <p className="mt-1 break-words text-xs italic text-[#4A6170]">
-                            Catatan Perencana: &ldquo;{mr.planner_notes}&rdquo;
-                          </p>
-                        )}
-                        <Link href={`/menu-planning?run=${mr.run_id}`}
-                          className="inline-flex min-h-[44px] items-center text-sm font-semibold text-[#0F766E] underline">
-                          Buka Rencana yang Diajukan
-                        </Link>
                       </div>
                       <StatusBadge tone={st.tone} label={st.label} />
                     </div>
-
-                    {mr.recovery_event_id && (
+                    {rev.recovery_event_id && (
                       <RecoveryReviewSummaryCard
-                        recoveryEventId={mr.recovery_event_id}
-                        isStaleInventoryHint={mr.is_stale_inventory}
+                        recoveryEventId={rev.recovery_event_id}
+                        isStaleInventoryHint={Boolean(rev.is_stale_inventory)}
                       />
                     )}
-
-                    <div>
-                      <label htmlFor={`mr-note-${mr.id}`} className="block text-xs font-semibold text-[#4A6170]">
-                        Catatan Kepala Dapur (wajib diisi jika meminta revisi)
-                      </label>
-                      <input
-                        id={`mr-note-${mr.id}`}
-                        type="text"
-                        value={noteVal}
-                         maxLength={2000}
-                        onChange={(e) =>
-                          setNotesByReview((prev) => ({ ...prev, [mr.id]: e.target.value }))
-                        }
-                        placeholder="Contoh: Disetujui operasional untuk minggu berjalan"
-                         className="mt-1 min-h-[44px] w-full rounded-lg border border-[#DCE6DE] bg-white px-3 text-base text-[#16354A] sm:text-sm"
-                      />
-                    </div>
-
+                    <input
+                      type="text"
+                      value={notesByReview[rev.id] ?? ""}
+                      onChange={(e) => setNotesByReview((p) => ({ ...p, [rev.id]: e.target.value }))}
+                      placeholder="Catatan tinjauan (opsional untuk setujui, wajib untuk revisi)..."
+                      className="min-h-[38px] w-full rounded-xl border border-[#DCE6DE] bg-white px-3 py-1.5 text-xs"
+                    />
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        disabled={reviewMutation.isPending || Boolean(mr.is_stale_inventory)}
+                        disabled={reviewMutation.isPending || Boolean(rev.is_stale_inventory)}
                         onClick={() =>
                           reviewMutation.mutate({
-                            reviewId: mr.id,
+                            reviewId: rev.id,
                             decision: "APPROVED",
-                             notes: noteVal.trim() || undefined,
+                            notes: notesByReview[rev.id],
                           })
                         }
-                         className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-[#0F766E] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#0B5F58] disabled:opacity-60"
+                        className="inline-flex min-h-[38px] items-center rounded-xl bg-[#0F766E] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#0B5F58] disabled:opacity-50"
                       >
-                        <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
-                        <span>Setujui Operasional</span>
+                        Setujui Rencana
                       </button>
                       <button
                         type="button"
-                         disabled={reviewMutation.isPending || !noteVal.trim()}
+                        disabled={reviewMutation.isPending || !(notesByReview[rev.id] ?? "").trim()}
                         onClick={() =>
                           reviewMutation.mutate({
-                            reviewId: mr.id,
+                            reviewId: rev.id,
                             decision: "REVISION_REQUIRED",
-                            notes: noteVal,
+                            notes: notesByReview[rev.id],
                           })
                         }
-                         className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl border border-[#F5C2C2] bg-white px-3.5 py-1.5 text-xs font-semibold text-[#991B1B] hover:bg-[#FEF0F0] disabled:opacity-60"
+                        className="inline-flex min-h-[38px] items-center rounded-xl border border-[#F5D59B] bg-[#FEF6E7] px-3.5 py-1.5 text-xs font-semibold text-[#8A5300] disabled:opacity-50"
                       >
-                        <span>Minta Revisi</span>
+                        Minta Revisi
                       </button>
                     </div>
                   </div>
@@ -423,56 +410,68 @@ export function ManagerDashboardView() {
           )}
         </section>
 
-        {/* Pending QC Inspections */}
+        {/* 5. Pending Pemeriksaan Sajian (with Inline Photo Preview) */}
         <section className="rounded-2xl border border-[#DCE6DE] bg-white p-5 shadow-[0_1px_2px_rgba(22,53,74,0.04)]">
           <div className="flex items-center justify-between gap-2 border-b border-[#EEF3EE] pb-3">
             <div>
-              <h2 className="text-base font-bold text-[#16354A]">
-                Pemeriksaan QC Menunggu Peninjauan
-              </h2>
-              <p className="text-xs text-[#647A87]">
-                Tinjau foto sampel, observasi AI asli, dan koreksi Petugas QC.
-              </p>
+              <h2 className="text-base font-bold text-[#16354A]">Foto Pemeriksaan Sajian Masuk</h2>
+              <p className="text-xs text-[#647A87]">Lihat foto nampan sajian & tandai selesai ditinjau.</p>
             </div>
-            <Link
-              href="/kitchen-qc"
-              className="text-xs font-semibold text-[#0F766E] hover:underline"
-            >
-              Buka Semua QC →
+            <Link href="/kitchen-qc" className="text-xs font-semibold text-[#0F766E] hover:underline">
+              Buka Pemeriksaan →
             </Link>
           </div>
 
           {data.pending_qc_inspections.length === 0 ? (
-            <p className="py-8 text-center text-sm text-[#647A87]">
-              Belum ada laporan QC baru yang menunggu tinjauan.
+            <p className="py-6 text-center text-sm text-[#647A87]">
+              Belum ada foto Pemeriksaan Sajian baru yang menunggu tinjauan.
             </p>
           ) : (
             <div className="mt-4 space-y-3">
               {data.pending_qc_inspections.map((insp) => {
                 const st = formatQCStatus(insp.status);
+                const latestImg = insp.images.at(-1);
                 return (
                   <div
                     key={insp.id}
-                    className="flex flex-col justify-between gap-3 rounded-xl border border-[#DCE6DE] bg-[#F5F8F5]/60 p-4 sm:flex-row sm:items-center"
+                    className="rounded-xl border border-[#DCE6DE] bg-[#F5F8F5]/60 p-3.5 space-y-2.5"
                   >
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
                         <span className="text-sm font-bold text-[#16354A]">
                           {insp.scenario_name} — {formatDayLabel(insp.day_index)}
                         </span>
-                        <StatusBadge tone={st.tone} label={st.label} />
+                        <p className="text-xs text-[#4A6170]">
+                          Petugas: {insp.submitted_by_name ?? insp.created_by_name} ·{" "}
+                          {formatDateTimeID(insp.submitted_at)}
+                        </p>
                       </div>
-                      <p className="mt-1 text-xs text-[#4A6170]">
-                        Petugas QC: {insp.submitted_by_name ?? insp.created_by_name} •{" "}
-                        {insp.images.length} foto • Dikirim {formatDateTimeID(insp.submitted_at)}
-                      </p>
+                      <StatusBadge tone={st.tone} label={st.label} />
                     </div>
-                    <Link
-                      href={`/kitchen-qc?inspection=${insp.id}`}
-                      className="inline-flex min-h-[38px] shrink-0 items-center justify-center rounded-xl bg-[#0F766E] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#0B5F58]"
-                    >
-                      Tinjau Pemeriksaan
-                    </Link>
+                    {latestImg && (
+                      <img
+                        src={apiClient.getProtectedImageUrl(latestImg.image_url)}
+                        alt={`Sampel sajian ${insp.scenario_name}`}
+                        className="h-36 w-full rounded-lg border border-slate-200 object-cover"
+                      />
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={reviewQCMutation.isPending}
+                        onClick={() => reviewQCMutation.mutate(insp.id)}
+                        className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg bg-[#0F766E] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0B5F58]"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        Tandai Selesai Ditinjau
+                      </button>
+                      <Link
+                        href={`/kitchen-qc?inspection=${insp.id}`}
+                        className="inline-flex min-h-[36px] items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        Lihat Detail Lengkap
+                      </Link>
+                    </div>
                   </div>
                 );
               })}
@@ -481,67 +480,98 @@ export function ManagerDashboardView() {
         </section>
       </div>
 
-      {/* Bottom Row: Inventory Alerts & Audit Trail */}
+      {/* 6. Purchase Evidence Verification Queue & Recent Audit */}
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <section className="rounded-2xl border border-[#DCE6DE] bg-white p-5 shadow-[0_1px_2px_rgba(22,53,74,0.04)]">
           <div className="flex items-center justify-between border-b border-[#EEF3EE] pb-3">
-            <div className="flex items-center gap-2">
-              <Package className="h-4 w-4 text-[#0F766E]" aria-hidden="true" />
-              <h2 className="text-base font-bold text-[#16354A]">Peringatan Stok Bahan (&lt; 10 kg)</h2>
-            </div>
-            <Link href="/inventory" className="text-xs font-semibold text-[#0F766E] hover:underline">
-              Lihat Inventaris →
+            <h2 className="text-base font-bold text-[#16354A]">
+              Bukti Pembelian Menunggu Verifikasi ({pendingDocs.length})
+            </h2>
+            <Link href="/shopping-list?tab=purchases" className="text-xs font-semibold text-[#0F766E] hover:underline">
+              Kelola Bukti →
             </Link>
           </div>
-          {data.inventory_dataset_name && (
-            <p className="mt-3 break-words text-sm text-[#647A87]">
-              Acuan rencana layak terbaru: {data.inventory_dataset_name}{data.inventory_dataset_is_synthetic ? " (Simulasi)" : ""}
-            </p>
-          )}
-          {data.low_stock_alerts.length === 0 ? (
-            <p className="py-6 text-sm text-[#647A87]">
-              {data.inventory_dataset_name ? "Tidak ada bahan di bawah ambang pada dataset ini." : "Hitung rencana yang layak untuk melihat peringatan stok."}
-            </p>
+          {pendingDocs.length === 0 ? (
+            <p className="py-6 text-sm text-[#647A87]">Semua catatan pembelian sudah diverifikasi.</p>
           ) : (
+            <div className="mt-3 space-y-2.5 text-xs">
+              {pendingDocs.map((doc) => (
+                <div key={doc.id} className="rounded-lg border border-slate-200 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-bold text-slate-900">{doc.supplier_name}</span>
+                    <StatusBadge label={doc.evidence_status} tone={doc.has_evidence_file ? "warning" : "neutral"} />
+                  </div>
+                  <p className="mt-0.5 text-slate-600">
+                    {formatJakartaDate(doc.purchase_date)}
+                    {doc.total_amount_idr != null ? ` · ${formatIDR(doc.total_amount_idr)}` : ""}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {doc.has_evidence_file && doc.evidence_url && (
+                      <a
+                        href={apiClient.getProtectedImageUrl(doc.evidence_url)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded border border-slate-300 px-2.5 py-1 font-semibold text-[#0F766E]"
+                      >
+                        Buka Bukti
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      disabled={!doc.has_evidence_file || reviewPurchaseMutation.isPending}
+                      onClick={() =>
+                        reviewPurchaseMutation.mutate({ docId: doc.id, decision: "VERIFIED_MATCH" })
+                      }
+                      className="rounded bg-emerald-700 px-2.5 py-1 font-semibold text-white disabled:opacity-40"
+                    >
+                      Tandai Cocok
+                    </button>
+                    <button
+                      type="button"
+                      disabled={reviewPurchaseMutation.isPending}
+                      onClick={() =>
+                        reviewPurchaseMutation.mutate({
+                          docId: doc.id,
+                          decision: "DISCREPANCY_FLAGGED",
+                        })
+                      }
+                      className="inline-flex items-center gap-1 rounded border border-rose-300 bg-rose-50 px-2.5 py-1 font-semibold text-rose-800"
+                    >
+                      <XCircle className="h-3 w-3" /> Selisih
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-2xl border border-[#DCE6DE] bg-white p-5 shadow-[0_1px_2px_rgba(22,53,74,0.04)]">
+          <div className="flex items-center justify-between border-b border-[#EEF3EE] pb-3">
+            <h2 className="text-base font-bold text-[#16354A]">Peringatan Stok & Jejak Audit</h2>
+            <Link href="/inventory" className="text-xs font-semibold text-[#0F766E] hover:underline">
+              Stok Bahan →
+            </Link>
+          </div>
+          {data.low_stock_alerts.length > 0 && (
             <ul className="mt-3 divide-y divide-[#EEF3EE] text-xs">
-              {data.low_stock_alerts.map((al) => (
-                <li key={al.ingredient_code} className="flex items-center justify-between py-2.5">
-                  <span className="font-semibold text-[#16354A]">
-                    {al.ingredient_name}{" "}
-                    <span className="font-normal text-[#647A87]">({al.ingredient_code})</span>
-                  </span>
-                  <span className="inline-flex items-center gap-1 font-semibold text-[#B45309] tabular-nums">
-                    <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+              {data.low_stock_alerts.slice(0, 4).map((al) => (
+                <li key={al.ingredient_code} className="flex items-center justify-between py-2">
+                  <span className="font-semibold text-[#16354A]">{al.ingredient_name}</span>
+                  <span className="inline-flex items-center gap-1 font-semibold text-[#B45309]">
+                    <AlertTriangle className="h-3.5 w-3.5" />
                     {formatWeightFromGrams(al.stock_raw_g)}
                   </span>
                 </li>
               ))}
             </ul>
           )}
-        </section>
-
-        <section className="rounded-2xl border border-[#DCE6DE] bg-white p-5 shadow-[0_1px_2px_rgba(22,53,74,0.04)]">
-          <div className="border-b border-[#EEF3EE] pb-3">
-            <h2 className="text-base font-bold text-[#16354A]">Aktivitas & Jejak Audit Terbaru</h2>
-            <p className="text-xs text-[#647A87]">
-              Catatan kronologis transisi rencana menu, simulasi, dan pemeriksaan QC.
-            </p>
-          </div>
-          {data.recent_audit_events.length === 0 ? (
-            <p className="py-6 text-sm text-[#647A87]">Belum ada catatan audit tercatat.</p>
-          ) : (
-            <ul className="mt-3 max-h-[260px] divide-y divide-[#EEF3EE] overflow-auto text-xs">
-              {data.recent_audit_events.map((ev) => (
-                <li key={ev.id} className="flex items-start justify-between gap-3 py-2.5">
-                  <div>
-                    <p className="font-semibold text-[#16354A]">{formatAuditAction(ev.action)}</p>
-                    <p className="text-[11px] text-[#647A87]">
-                      {ev.actor_full_name ?? ev.actor_username ?? "Sistem"} • {ev.entity_type}
-                    </p>
-                  </div>
-                  <span className="shrink-0 text-[11px] text-[#647A87] tabular-nums">
-                    {formatDateTimeID(ev.created_at)}
-                  </span>
+          {data.recent_audit_events.length > 0 && (
+            <ul className="mt-3 max-h-[180px] divide-y divide-[#EEF3EE] overflow-auto border-t border-slate-100 pt-2 text-xs">
+              {data.recent_audit_events.slice(0, 6).map((ev) => (
+                <li key={ev.id} className="flex items-center justify-between gap-2 py-2">
+                  <span className="font-medium text-slate-800">{formatAuditAction(ev.action)}</span>
+                  <span className="text-[11px] text-slate-500">{formatDateTimeID(ev.created_at)}</span>
                 </li>
               ))}
             </ul>

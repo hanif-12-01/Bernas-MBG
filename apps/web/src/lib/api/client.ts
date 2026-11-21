@@ -9,6 +9,8 @@ import type {
   DisruptionConditionRequest,
   DisruptionImpactReport,
   EffectiveOperationalPlanResponse,
+  GoodsReceiptCreateRequest,
+  GoodsReceiptResponse,
   HealthResponse,
   HumanCorrectedComponent,
   IncidentActionResponse,
@@ -18,9 +20,13 @@ import type {
   IncidentStartRecoveryRequest,
   IngredientIncidentResponse,
   InventoryCatalogResponse,
+  InventoryIngredientDetailResponse,
   InventoryLotsResponse,
   InventoryTransactionImportResponse,
+  KitchenStockCustodianStatusResponse,
   ManagerDashboardSummary,
+  ManualStockAdjustmentRequest,
+  ManualStockAdjustmentResponse,
   MarketPriceReferenceItem,
   MarketReferenceImportResponse,
   MaterialUsage,
@@ -29,7 +35,10 @@ import type {
   MenuReviewStatusEnum,
   OperationalPlanAssignmentResponse,
   OptimizationRunResponse,
+  PlannerDashboardSummary,
   PriceOverrideEntry,
+  PurchaseDocumentCreateRequest,
+  PurchaseDocumentResponse,
   QCDashboardSummary,
   QCImageInfo,
   QCInspectionResponse,
@@ -187,6 +196,26 @@ export const apiClient = {
     const q = params.toString() ? `?${params.toString()}` : "";
     return requestJson<InventoryCatalogResponse>(`/inventory${q}`);
   },
+
+  getInventoryDetail: (
+    ingredientCode: string,
+    datasetVersionId?: string,
+    productionDate?: string
+  ) => {
+    const params = new URLSearchParams();
+    if (datasetVersionId) params.set("dataset_version_id", datasetVersionId);
+    if (productionDate) params.set("production_date", productionDate);
+    const q = params.toString() ? `?${params.toString()}` : "";
+    return requestJson<InventoryIngredientDetailResponse>(
+      `/inventory/${encodeURIComponent(ingredientCode)}/detail${q}`
+    );
+  },
+
+  recordInventoryAdjustment: (payload: ManualStockAdjustmentRequest) =>
+    requestJson<ManualStockAdjustmentResponse>("/inventory/adjustments", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   listInventorySources: () => requestJson<DatasetSourceItem[]>("/inventory/sources"),
 
@@ -413,6 +442,68 @@ export const apiClient = {
   // ---- Role Summaries ----
   getManagerSummary: () => requestJson<ManagerDashboardSummary>("/dashboard/manager-summary"),
   getQCSummary: () => requestJson<QCDashboardSummary>("/dashboard/qc-summary"),
+  getPlannerSummary: () => requestJson<PlannerDashboardSummary>("/dashboard/planner-summary"),
+
+  // ---- Single Stock Custodian Delegation ----
+  getStockCustodian: () =>
+    requestJson<KitchenStockCustodianStatusResponse>("/stock-custodian"),
+
+  assignStockCustodian: (payload: {
+    custodian_user_id: string;
+    effective_until?: string | null;
+    notes?: string | null;
+  }) =>
+    requestJson<KitchenStockCustodianStatusResponse>("/stock-custodian/assign", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  revokeStockCustodian: (notes?: string | null) =>
+    requestJson<KitchenStockCustodianStatusResponse>("/stock-custodian/revoke", {
+      method: "POST",
+      body: JSON.stringify({ notes: notes ?? null }),
+    }),
+
+  // ---- Procurement Evidence & Goods Receipts ----
+  listPurchaseDocuments: (limit = 50) =>
+    requestJson<PurchaseDocumentResponse[]>(`/procurement/documents?limit=${limit}`),
+
+  createPurchaseDocument: (payload: PurchaseDocumentCreateRequest) =>
+    requestJson<PurchaseDocumentResponse>("/procurement/documents", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  uploadPurchaseEvidence: (documentId: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return requestJson<PurchaseDocumentResponse>(
+      `/procurement/documents/${documentId}/evidence`,
+      {
+        method: "POST",
+        body: fd,
+      },
+      30000
+    );
+  },
+
+  reviewPurchaseDocument: (
+    documentId: string,
+    payload: { decision: "VERIFIED_MATCH" | "DISCREPANCY_FLAGGED"; notes?: string | null }
+  ) =>
+    requestJson<PurchaseDocumentResponse>(`/procurement/documents/${documentId}/review`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  listGoodsReceipts: (limit = 50) =>
+    requestJson<GoodsReceiptResponse[]>(`/procurement/receipts?limit=${limit}`),
+
+  createGoodsReceipt: (payload: GoodsReceiptCreateRequest) =>
+    requestJson<GoodsReceiptResponse>("/procurement/receipts", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   // ---- Sprint 3B: Adaptive Procurement Recovery ----
   previewRecoveryImpact: (payload: DisruptionConditionRequest) =>
@@ -512,13 +603,22 @@ export const apiClient = {
     incidentId: string,
     payload: {
       status: string;
-      notes: string;
+      notes?: string;
       dispose_held_lots?: boolean;
       disposal_notes?: string;
     }
   ) =>
     requestJson<IngredientIncidentResponse>(`/incidents/${incidentId}/status`, {
       method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  recordIncidentDisposal: (
+    incidentId: string,
+    payload: { notes?: string; idempotency_key?: string } = {}
+  ) =>
+    requestJson<IngredientIncidentResponse>(`/incidents/${incidentId}/record-disposal`, {
+      method: "POST",
       body: JSON.stringify(payload),
     }),
 

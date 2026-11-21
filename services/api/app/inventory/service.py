@@ -31,6 +31,8 @@ from app.db.models import (
     SupplierDeliveryORM,
 )
 from app.ingestion.unit_converter import UnitConversionError, convert_price_to_idr_per_g
+from app.inventory.coverage import IngredientCoverageForecast, compute_coverage_forecasts_for_kitchen
+from app.inventory.timezone_utils import parse_production_date_jakarta, to_jakarta_date
 from app.inventory.unit_normalizer import (
     PriceProvenanceEnum,
     classify_price_provenance,
@@ -87,6 +89,10 @@ class InventoryLotSummary(BaseModel):
     damaged_raw_g: float = 0.0
     expires_at: Optional[datetime] = None
     expiry_known: bool = False
+    received_at: Optional[datetime] = None
+    supplier_name: Optional[str] = None
+    purchase_document_id: Optional[UUID] = None
+    days_until_expiry: Optional[int] = None
     verification_status: str
     safety_hold_status: str = "NONE"
     notes: Optional[str] = None
@@ -112,6 +118,11 @@ class IngredientAvailability(BaseModel):
     incoming_raw_g: float = 0.0
     delivery_status: str = "NONE"
     quarantined_events_count: int = 0
+    latest_supplier_name: Optional[str] = None
+    latest_received_at: Optional[datetime] = None
+    nearest_expiry_at: Optional[datetime] = None
+    days_until_nearest_expiry: Optional[int] = None
+    coverage: Optional[IngredientCoverageForecast] = None
     as_of_timestamp: datetime
     production_date: datetime
     dataset_version_id: UUID
@@ -251,7 +262,8 @@ def compute_usable_inventory(
     - Never treats missing expiration data (expiry_known=False) or UNKNOWN lots as confirmed fresh stock.
     - Never fabricates stock for missing ingredient records (exposes explicit UNKNOWN state).
     """
-    prod_dt = _ensure_utc(production_date) or _utcnow()
+    prod_dt = _ensure_utc(production_date) or parse_production_date_jakarta(None)
+    prod_jkt_date = to_jakarta_date(prod_dt)
     as_of = _utcnow()
 
     ds_row = session.get(DatasetVersionORM, str(dataset_version_id))
@@ -366,6 +378,9 @@ def compute_usable_inventory(
     warning_count = 0
     unknown_count = 0
     total_quarantined = len(quarantined_movements)
+    usable_lots_by_ing_id: Dict[str, List[Tuple[float, Optional[datetime]]]] = {}
+    safety_held_by_ing_id: Dict[str, float] = {}
+    unverified_by_ing_id: Dict[str, float] = {}
 
     for ing in ingredients:
         ing_lots = lots_by_ing.get(ing.id, [])
@@ -610,21 +625,84 @@ def compute_usable_inventory(
         usable_before_general = sum(lot_usable_map.values())
         usable_raw_g = max(0.0, usable_before_general - general_reserved)
 
-        lot_summaries = [
-            InventoryLotSummary(
-                id=UUID(lot.id),
-                lot_code=lot.lot_code,
-                recorded_raw_g=round(lot.recorded_raw_g, 3),
-                usable_raw_g=round(lot_usable_map.get(lot.id, 0.0), 3),
-                damaged_raw_g=round(lot.damaged_raw_g, 3),
-                expires_at=lot.expires_at,
-                expiry_known=lot.expiry_known,
-                verification_status=lot.verification_status,
-                safety_hold_status=getattr(lot, "safety_hold_status", "NONE") or "NONE",
-                notes=lot.notes,
+        lot_summaries: List[InventoryLotSummary] = []
+        lot_dates: List[Tuple[datetime, InventoryLotORM]] = []
+        for lot in ing_lots:
+            lot_exp_dt = _ensure_utc(lot.expires_at)
+            days_until = (
+                (to_jakarta_date(lot_exp_dt) - prod_jkt_date).days
+                if (lot.expiry_known and lot_exp_dt is not None)
+                else None
+            )
+            lot_summaries.append(
+                InventoryLotSummary(
+                    id=UUID(lot.id),
+                    lot_code=lot.lot_code,
+                    recorded_raw_g=round(lot.recorded_raw_g, 3),
+                    usable_raw_g=round(lot_usable_map.get(lot.id, 0.0), 3),
+                    damaged_raw_g=round(lot.damaged_raw_g, 3),
+                    expires_at=lot.expires_at,
+                    expiry_known=lot.expiry_known,
+                    received_at=lot.received_at,
+                    supplier_name=getattr(lot, "supplier_name", None),
+                    purchase_document_id=(
+                        UUID(lot.purchase_document_id)
+                        if getattr(lot, "purchase_document_id", None)
+                        else None
+                    ),
+                    days_until_expiry=days_until,
+                    verification_status=lot.verification_status,
+                    safety_hold_status=getattr(lot, "safety_hold_status", "NONE") or "NONE",
+                    notes=lot.notes,
+                )
+            )
+            sort_ts = _ensure_utc(lot.received_at or lot.created_at) or as_of
+            lot_dates.append((sort_ts, lot))
+
+        lot_dates.sort(key=lambda pair: pair[0], reverse=True)
+        latest_supplier_name = next(
+            (
+                getattr(l, "supplier_name", None)
+                for _, l in lot_dates
+                if getattr(l, "supplier_name", None)
+            ),
+            None,
+        )
+        received_timestamps = [_ensure_utc(l.received_at) for l in ing_lots if l.received_at is not None]
+        latest_received_at = (
+            max(dt for dt in received_timestamps if dt is not None) if received_timestamps else None
+        )
+        usable_expiries = [
+            _ensure_utc(lot.expires_at)
+            for lot in ing_lots
+            if lot_usable_map.get(lot.id, 0.0) > 1e-6 and lot.expiry_known and lot.expires_at is not None
+        ]
+        fallback_expiries = [
+            _ensure_utc(lot.expires_at)
+            for lot in ing_lots
+            if (getattr(lot, "safety_hold_status", "NONE") or "NONE") == "NONE"
+            and lot.expiry_known
+            and lot.expires_at is not None
+        ]
+        candidate_expiries = [d for d in (usable_expiries or fallback_expiries) if d is not None]
+        nearest_expiry_at = min(candidate_expiries) if candidate_expiries else None
+        days_until_nearest_expiry = (
+            (to_jakarta_date(nearest_expiry_at) - prod_jkt_date).days
+            if nearest_expiry_at is not None
+            else None
+        )
+
+        # Record usable FEFO lots for batch coverage forecast after loop
+        usable_lots_by_ing_id[ing.id] = [
+            (
+                float(lot_usable_map.get(lot.id, 0.0)),
+                _ensure_utc(lot.expires_at),
             )
             for lot in ing_lots
+            if lot_usable_map.get(lot.id, 0.0) > 1e-6 and lot.expiry_known and lot.expires_at is not None
         ]
+        safety_held_by_ing_id[ing.id] = safety_held_raw_g + rejected_disposed_raw_g
+        unverified_by_ing_id[ing.id] = unverified_raw_g
 
         # If every single lot was unverified/missing expiry/on hold and usable is 0 with zero clean verified lots
         has_verified_lot = any(
@@ -750,6 +828,10 @@ def compute_usable_inventory(
                 incoming_raw_g=round(incoming_raw_g, 3),
                 delivery_status=delivery_status,
                 quarantined_events_count=len(ing_quar),
+                latest_supplier_name=latest_supplier_name,
+                latest_received_at=latest_received_at,
+                nearest_expiry_at=nearest_expiry_at,
+                days_until_nearest_expiry=days_until_nearest_expiry,
                 as_of_timestamp=as_of,
                 production_date=prod_dt,
                 dataset_version_id=dataset_version_id,
@@ -761,6 +843,18 @@ def compute_usable_inventory(
                 warnings=warnings,
             )
         )
+
+    coverage_map = compute_coverage_forecasts_for_kitchen(
+        session,
+        kitchen_id=kitchen_id,
+        dataset_version_id=dataset_version_id,
+        production_dt_utc=prod_dt,
+        usable_lots_by_ing_id=usable_lots_by_ing_id,
+        safety_held_by_ing_id=safety_held_by_ing_id,
+        unverified_by_ing_id=unverified_by_ing_id,
+    )
+    for item in items:
+        item.coverage = coverage_map.get(str(item.ingredient_id))
 
     return InventoryAvailabilitySummary(
         kitchen_id=kitchen_id,
@@ -992,7 +1086,8 @@ def import_inventory_transactions_csv(
         exp_at_raw = (row.get("expires_at") or "").strip()
         exp_known_raw = (row.get("expiry_known") or "true").strip().lower()
         doc_ref = (row.get("source_document_ref") or "").strip() or None
-        supplier_name = (row.get("supplier_name") or "Pemasok Umum").strip()
+        explicit_supplier_name = (row.get("supplier_name") or "").strip() or None
+        supplier_name = explicit_supplier_name or "Pemasok Tidak Dicatat"
         deliv_status = (row.get("delivery_status") or "RECEIVED").strip().upper()
         density_raw = (row.get("density_g_per_ml") or "").strip()
         item_wt_raw = (row.get("unit_weight_g") or "").strip()
@@ -1164,6 +1259,7 @@ def import_inventory_transactions_csv(
                 expires_at=exp_dt,
                 expiry_known=expiry_known,
                 received_at=ev_dt,
+                supplier_name=explicit_supplier_name,
                 verification_status="VERIFIED" if expiry_known else "UNVERIFIED",
                 unit_original=norm.original_unit,
                 quantity_original=norm.original_value,
@@ -1177,6 +1273,8 @@ def import_inventory_transactions_csv(
         if ev_type in {"OPENING_BALANCE", "GOODS_RECEIPT"}:
             target_lot = _get_or_create_lot(0.0)
             target_lot.recorded_raw_g += norm.normalized_raw_g
+            if explicit_supplier_name:
+                target_lot.supplier_name = explicit_supplier_name
             if exp_dt is not None:
                 target_lot.expires_at = exp_dt
                 target_lot.expiry_known = True

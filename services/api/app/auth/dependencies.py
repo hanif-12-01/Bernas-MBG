@@ -9,8 +9,9 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.auth.schemas import KitchenMembershipInfo, RoleEnum
+from app.auth.schemas import KitchenMembershipInfo, RoleEnum, StockCustodianSummary
 from app.auth.security import constant_time_equals, hash_session_token
+from app.custodian.lookup import resolve_active_custodian
 from app.db.models import AuditEventORM, AuthSessionORM, KitchenMembershipORM, UserORM
 from app.db.session import db_manager
 
@@ -32,6 +33,8 @@ class AuthContext:
     role: RoleEnum
     csrf_token: str
     memberships: List[KitchenMembershipInfo]
+    is_active_stock_custodian: bool = False
+    stock_custodian: Optional[StockCustodianSummary] = None
 
 
 def get_db_session():
@@ -130,6 +133,20 @@ def get_current_auth(
             detail="Pengguna tidak memiliki keanggotaan aktif pada dapur yang dipilih.",
         )
 
+    resolved_custodian = resolve_active_custodian(session, active_membership.kitchen_id)
+    custodian_summary = StockCustodianSummary(
+        is_assigned=resolved_custodian is not None,
+        custodian_user_id=UUID(resolved_custodian[1].id) if resolved_custodian else None,
+        custodian_username=resolved_custodian[1].username if resolved_custodian else None,
+        custodian_full_name=resolved_custodian[1].full_name if resolved_custodian else None,
+        effective_until=resolved_custodian[0].effective_until if resolved_custodian else None,
+    )
+    is_active_custodian = bool(
+        active_membership.role == RoleEnum.QC_OFFICER
+        and resolved_custodian is not None
+        and resolved_custodian[0].custodian_user_id == user.id
+    )
+
     return AuthContext(
         session_id=UUID(auth_session.id),
         user_id=UUID(user.id),
@@ -142,6 +159,8 @@ def get_current_auth(
         role=active_membership.role,
         csrf_token=auth_session.csrf_token,
         memberships=memberships,
+        is_active_stock_custodian=is_active_custodian,
+        stock_custodian=custodian_summary,
     )
 
 
@@ -159,6 +178,34 @@ def require_roles(*allowed_roles: RoleEnum):
         return auth
 
     return _checker
+
+
+def require_active_stock_custodian(
+    auth: AuthContext = Depends(get_current_auth),
+) -> AuthContext:
+    """Enforce SINGLE AUTHORITATIVE STOCK WRITER PER KITCHEN verified live against DB on every request."""
+    if auth.role != RoleEnum.QC_OFFICER:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Akses ditolak. Hanya Petugas QC Pengelola Stok (QC_OFFICER aktif yang ditugaskan) "
+                "yang berwenang mengubah catatan stok atau melaporkan penahanan bahan."
+            ),
+        )
+    if not auth.is_active_stock_custodian:
+        current_holder = (
+            auth.stock_custodian.custodian_full_name
+            if auth.stock_custodian and auth.stock_custodian.is_assigned
+            else None
+        )
+        detail = (
+            f"Akses ditolak. Anda bukan Petugas QC Pengelola Stok aktif untuk dapur ini "
+            f"(saat ini dipegang oleh {current_holder}). Hubungi Kepala Dapur untuk penugasan."
+            if current_holder
+            else "Akses ditolak. Dapur ini belum memiliki Petugas QC Pengelola Stok aktif atau penugasan telah dicabut/kedaluwarsa."
+        )
+        raise HTTPException(status_code=403, detail=detail)
+    return auth
 
 
 def record_audit_event(

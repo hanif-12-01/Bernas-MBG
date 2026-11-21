@@ -12,7 +12,13 @@ from app.auth.security import hash_password
 from app.data.incident_fixture import seed_incident_demo_dataset
 from app.data.inventory_quality_fixture import seed_inventory_quality_demo_dataset
 from app.data.recovery_fixture import seed_recovery_demo_dataset
-from app.db.models import KitchenMembershipORM, KitchenORM, ScenarioORM, UserORM
+from app.db.models import (
+    KitchenMembershipORM,
+    KitchenORM,
+    KitchenStockCustodianAssignmentORM,
+    ScenarioORM,
+    UserORM,
+)
 from app.inventory.service import seed_dataset_sources_if_empty
 
 # Deterministic UUIDs for local development & automated test kitchens
@@ -81,6 +87,7 @@ def seed_development_demo_accounts(
         ("kepala_dapur", "kepala.a@simulasi.gizioptima.local", "Budi Santoso (Kepala Dapur A)", kitchen_a.id, RoleEnum.KITCHEN_MANAGER),
         ("perencana_menu", "perencana.a@simulasi.gizioptima.local", "Siti Rahma (Perencana Menu A)", kitchen_a.id, RoleEnum.MENU_PLANNER),
         ("petugas_qc", "qc.a@simulasi.gizioptima.local", "Dina Lestari (Petugas QC A)", kitchen_a.id, RoleEnum.QC_OFFICER),
+        ("petugas_qc_2", "qc2.a@simulasi.gizioptima.local", "Rizal Mahendra (Petugas QC Cadangan A)", kitchen_a.id, RoleEnum.QC_OFFICER),
     ]
     if include_second_kitchen and kitchen_b is not None:
         account_specs.extend(
@@ -88,6 +95,7 @@ def seed_development_demo_accounts(
                 ("kepala_dapur_b", "kepala.b@simulasi.gizioptima.local", "Hendra Wijaya (Kepala Dapur B)", kitchen_b.id, RoleEnum.KITCHEN_MANAGER),
                 ("perencana_menu_b", "perencana.b@simulasi.gizioptima.local", "Rina Kusuma (Perencana Menu B)", kitchen_b.id, RoleEnum.MENU_PLANNER),
                 ("petugas_qc_b", "qc.b@simulasi.gizioptima.local", "Fajar Pratama (Petugas QC B)", kitchen_b.id, RoleEnum.QC_OFFICER),
+                ("petugas_qc_b_2", "qc2.b@simulasi.gizioptima.local", "Tania Putri (Petugas QC Cadangan B)", kitchen_b.id, RoleEnum.QC_OFFICER),
             ]
         )
 
@@ -134,6 +142,39 @@ def seed_development_demo_accounts(
             "role": role.value,
             "full_name": full_name,
         }
+
+    # Idempotently seed initial active stock custodian per kitchen ONLY if the kitchen has no assignment history yet
+    custodian_pairs = [(kitchen_a.id, "petugas_qc", "kepala_dapur")]
+    if include_second_kitchen and kitchen_b is not None:
+        custodian_pairs.append((kitchen_b.id, "petugas_qc_b", "kepala_dapur_b"))
+    now = datetime.now(timezone.utc)
+    for k_id, qc_uname, mgr_uname in custodian_pairs:
+        has_any_assignment = session.execute(
+            select(KitchenStockCustodianAssignmentORM.id).where(
+                KitchenStockCustodianAssignmentORM.kitchen_id == k_id
+            ).limit(1)
+        ).first()
+        if has_any_assignment is not None:
+            continue
+        qc_info = seeded.get(qc_uname)
+        mgr_info = seeded.get(mgr_uname)
+        if qc_info is None:
+            continue
+        session.add(
+            KitchenStockCustodianAssignmentORM(
+                id=str(uuid4()),
+                kitchen_id=k_id,
+                custodian_user_id=qc_info["user_id"],
+                assigned_by_user_id=mgr_info["user_id"] if mgr_info else None,
+                status="ACTIVE",
+                active_kitchen_key=k_id,
+                effective_from=now,
+                effective_until=None,
+                notes="Penugasan awal Petugas QC Pengelola Stok (seed sistem).",
+                created_at=now,
+                updated_at=now,
+            )
+        )
 
     seed_dataset_sources_if_empty(session)
     seed_inventory_quality_demo_dataset(session, kitchen_id=UUID(kitchen_a.id))

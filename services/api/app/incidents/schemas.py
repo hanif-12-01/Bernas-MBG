@@ -42,10 +42,10 @@ class IncidentAffectedLotInput(BaseModel):
 
 
 class IncidentCreateRequest(BaseModel):
-    title: str = Field(min_length=3, max_length=255)
+    title: Optional[str] = Field(default=None, max_length=255)
     category: IncidentCategoryEnum
     severity: IncidentSeverityEnum = IncidentSeverityEnum.HIGH
-    notes: str = Field(min_length=5, max_length=2000)
+    notes: Optional[str] = Field(default=None, max_length=2000)
     dataset_version_id: Optional[UUID] = None
     observed_at: Optional[datetime] = None
     supplier_name: Optional[str] = Field(default=None, max_length=255)
@@ -59,9 +59,14 @@ class IncidentCreateRequest(BaseModel):
 
 class IncidentStatusUpdateRequest(BaseModel):
     status: IncidentStatusEnum
-    notes: str = Field(min_length=3, max_length=2000)
+    notes: Optional[str] = Field(default=None, max_length=2000)
     dispose_held_lots: bool = False
     disposal_notes: Optional[str] = Field(default=None, max_length=500)
+
+
+class IncidentRecordDisposalRequest(BaseModel):
+    notes: Optional[str] = Field(default=None, max_length=1000)
+    idempotency_key: Optional[str] = Field(default=None, max_length=128)
 
 
 class IncidentReleaseHoldRequest(BaseModel):
@@ -197,6 +202,11 @@ class IngredientIncidentResponse(BaseModel):
     exposure_status: str
     production_exposures: List[ProductionExposureItem] = Field(default_factory=list)
     recovery_event_id: Optional[UUID] = None
+    disposal_authorized: bool = False
+    disposal_authorized_by_name: Optional[str] = None
+    disposal_authorized_at: Optional[datetime] = None
+    disposal_executed_by_name: Optional[str] = None
+    disposal_executed_at: Optional[datetime] = None
     images: List[IncidentImageInfo] = Field(default_factory=list)
     actions: List[IncidentActionResponse] = Field(default_factory=list)
     safety_notice: str = (

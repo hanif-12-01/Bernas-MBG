@@ -1,408 +1,853 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "next/navigation";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowUpDown,
   CheckCircle2,
   Download,
+  FileText,
   Info,
+  Loader2,
+  PackageCheck,
   Search,
-  SlidersHorizontal,
+  ShoppingBasket,
+  Upload,
+  XCircle,
 } from "lucide-react";
 
-import {
-  AccessDeniedState,
-  EmptyState,
-  ErrorState,
-  LoadingSkeleton,
-} from "@/components/feedback/FeedbackStates";
+import { EmptyState, ErrorState, LoadingSkeleton } from "@/components/feedback/FeedbackStates";
 import { PageHeader } from "@/components/layout/AppShell";
 import { DatasetSimulationNotice } from "@/components/ui/DatasetSimulationNotice";
+import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useAuth } from "@/hooks/useAuth";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { apiClient, ApiError } from "@/lib/api/client";
+import { formatIDR, formatWeightFromGrams } from "@/lib/formatters/indonesian";
 import {
-  formatIDR,
-  formatPercent,
-  formatWeightFromGrams,
-} from "@/lib/formatters/indonesian";
+  formatJakartaDate,
+  formatJakartaDateTime,
+  getJakartaTodayISO,
+} from "@/lib/formatters/jakartaDate";
+import type { EvidenceStatusEnum, GoodsConditionEnum } from "@/types/api";
 
-export default function ShoppingListPage() {
-  const { user } = useAuth();
-  if (user && user.active_role === "QC_OFFICER") {
-    return (
-      <div className="space-y-6">
-        <PageHeader title="Daftar Belanja" />
-        <AccessDeniedState
-          title="Daftar Belanja Tidak Tersedia untuk Petugas QC"
-          description="Daftar belanja pengadaan hanya dapat diakses oleh Perencana Menu dan Kepala Dapur."
-        />
-      </div>
-    );
+type ActiveTab = "needs" | "purchases" | "receipts";
+
+function evidenceBadge(status: EvidenceStatusEnum): {
+  label: string;
+  tone: "success" | "warning" | "critical" | "neutral";
+} {
+  switch (status) {
+    case "NO_EVIDENCE":
+      return { label: "Belum Ada Bukti", tone: "neutral" };
+    case "RECEIPT_UPLOADED":
+      return { label: "Bukti Diunggah", tone: "warning" };
+    case "GOODS_RECEIVED":
+      return { label: "Barang Diterima", tone: "warning" };
+    case "VERIFIED_MATCH":
+      return { label: "Terverifikasi Cocok", tone: "success" };
+    case "DISCREPANCY_FLAGGED":
+      return { label: "Ada Selisih", tone: "critical" };
   }
-  return <ShoppingListContent />;
+}
+
+function conditionLabel(c: GoodsConditionEnum): string {
+  switch (c) {
+    case "GOOD":
+      return "Baik (Layak Pakai)";
+    case "DAMAGED":
+      return "Rusak / Kemasan Sobek";
+    case "QUARANTINED":
+      return "Karantina (Perlu Cek)";
+    case "REJECTED":
+      return "Ditolak Saat Terima";
+  }
 }
 
 function ShoppingListContent() {
   const { user } = useAuth();
-  const {
-    selectedRun,
-    selectedScenario,
-    isLoadingList,
-    isLoadingRun,
-    refreshAll,
-  } = useWorkspace();
+  const { selectedRun, selectedScenario, activeDataset, isLoadingList, isLoadingRun, refreshAll } =
+    useWorkspace();
+  const qc = useQueryClient();
+  const searchParams = useSearchParams();
 
+  const isQC = user?.active_role === "QC_OFFICER";
+  const isCustodian = Boolean(user?.active_role === "QC_OFFICER" && user?.is_active_stock_custodian);
+  const isManager = user?.active_role === "KITCHEN_MANAGER";
+  const canSeePrices = !isQC;
+
+  const initialTabParam = searchParams.get("tab");
+  const [tab, setTab] = useState<ActiveTab>(
+    initialTabParam === "purchases" || initialTabParam === "receipts" ? initialTabParam : "needs"
+  );
+
+  useEffect(() => {
+    const p = searchParams.get("tab");
+    if (p === "needs" || p === "purchases" || p === "receipts") {
+      setTab(p);
+    }
+  }, [searchParams]);
+
+  // Tab 1 state
   const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState<"qty_desc" | "name_asc" | "cost_desc">("qty_desc");
   const [exportMessage, setExportMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(
     null
   );
   const [isExporting, setIsExporting] = useState(false);
 
-  const recoveryEventsQuery = useQuery({
-    queryKey: ["recovery-events"],
-    queryFn: apiClient.listRecoveryEvents,
-    enabled: Boolean(selectedRun),
-  });
+  // Tab 2 state (New Purchase Record - NEVER auto-filled!)
+  const [supplierName, setSupplierName] = useState("");
+  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [purchaseDate, setPurchaseDate] = useState(() => getJakartaTodayISO());
+  const [totalAmountIdr, setTotalAmountIdr] = useState("");
+  const [docNotes, setDocNotes] = useState("");
+  const [docFeedback, setDocFeedback] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
-  const matchedRecovery = useMemo(() => {
-    if (!selectedRun || !recoveryEventsQuery.data) return null;
-    return (
-      recoveryEventsQuery.data.find(
-        (ev) =>
-          ev.selected_run_id === selectedRun.run_id ||
-          ev.min_disruption.run_id === selectedRun.run_id ||
-          ev.min_cost.run_id === selectedRun.run_id
-      ) ?? null
-    );
-  }, [selectedRun, recoveryEventsQuery.data]);
+  // Tab 3 state (Goods Receipt)
+  const [receiptDocId, setReceiptDocId] = useState("");
+  const [receiptIngCode, setReceiptIngCode] = useState("");
+  const [receiptLotCode, setReceiptLotCode] = useState("");
+  const [receiptQty, setReceiptQty] = useState("");
+  const [receiptUnit, setReceiptUnit] = useState("kg");
+  const [receiptExpiry, setReceiptExpiry] = useState("");
+  const [receiptSupplier, setReceiptSupplier] = useState("");
+  const [receiptCondition, setReceiptCondition] = useState<GoodsConditionEnum>("GOOD");
+  const [receiptNotes, setReceiptNotes] = useState("");
+  const [receiptFeedback, setReceiptFeedback] = useState<{ tone: "ok" | "err"; text: string } | null>(
+    null
+  );
 
   const shoppingQuery = useQuery({
     queryKey: ["shopping-list", selectedRun?.run_id],
     queryFn: () => apiClient.getShoppingList(selectedRun!.run_id),
-    enabled: Boolean(selectedRun?.run_id && selectedRun?.validation_passed),
+    enabled: Boolean(selectedRun?.run_id && selectedRun?.validation_passed && !isQC),
     retry: 0,
   });
 
-  const pricesPerG = selectedRun?.input_snapshot?.prices_idr_per_g ?? {};
+  const inventoryQuery = useQuery({
+    queryKey: ["inventory", user?.active_kitchen_id, activeDataset?.id],
+    queryFn: () => apiClient.getInventory(activeDataset?.id),
+    enabled: Boolean(user),
+  });
 
-  const enrichedItems = useMemo(() => {
-    const raw = shoppingQuery.data ?? [];
-    const mapped = raw.map((item) => {
-      const priceG = pricesPerG[item.ingredient_code] ?? null;
-      const estimatedCost = priceG !== null ? item.used_raw_g * priceG : null;
-      const remainingAfterUse = item.available_raw_g - item.used_raw_g;
-      const additionalPurchaseG = Math.max(0, item.used_raw_g - item.available_raw_g);
-      const utilPct =
-        item.available_raw_g > 0 ? (item.used_raw_g / item.available_raw_g) * 100 : null;
-      return {
-        ...item,
-        pricePerKg: priceG !== null ? priceG * 1000 : null,
-        estimatedCost,
-        remainingAfterUse,
-        additionalPurchaseG,
-        utilPct,
-      };
-    });
+  const docsQuery = useQuery({
+    queryKey: ["purchase-documents", user?.active_kitchen_id],
+    queryFn: () => apiClient.listPurchaseDocuments(50),
+    enabled: Boolean(user),
+  });
 
-    const q = search.trim().toLowerCase();
-    const filtered = q
-      ? mapped.filter(
-          (i) =>
-            i.ingredient_name.toLowerCase().includes(q) ||
-            i.ingredient_code.toLowerCase().includes(q)
-        )
-      : mapped;
+  const receiptsQuery = useQuery({
+    queryKey: ["goods-receipts", user?.active_kitchen_id],
+    queryFn: () => apiClient.listGoodsReceipts(50),
+    enabled: Boolean(user),
+  });
 
-    return filtered.sort((a, b) => {
-      if (sortBy === "name_asc") return a.ingredient_name.localeCompare(b.ingredient_name, "id");
-      if (sortBy === "cost_desc") return (b.estimatedCost ?? 0) - (a.estimatedCost ?? 0);
-      return b.used_raw_g - a.used_raw_g;
-    });
-  }, [shoppingQuery.data, pricesPerG, search, sortBy]);
+  useEffect(() => {
+    if (!receiptIngCode && (inventoryQuery.data?.items?.length ?? 0) > 0) {
+      setReceiptIngCode(inventoryQuery.data!.items[0].code);
+    }
+  }, [inventoryQuery.data?.items, receiptIngCode]);
 
-  const handleExportCsv = async () => {
+  const createDocMutation = useMutation({
+    mutationFn: () => {
+      if (!supplierName.trim()) throw new Error("Nama pemasok wajib diisi.");
+      const amt = totalAmountIdr.trim() ? Number(totalAmountIdr) : undefined;
+      if (amt !== undefined && (!Number.isFinite(amt) || amt < 0)) {
+        throw new Error("Total nominal pembelian tidak valid.");
+      }
+      return apiClient.createPurchaseDocument({
+        dataset_version_id: activeDataset?.id,
+        linked_run_id: selectedRun?.run_id,
+        supplier_name: supplierName.trim(),
+        invoice_number: invoiceNumber.trim() || undefined,
+        purchase_date: purchaseDate || undefined,
+        total_amount_idr: amt,
+        notes: docNotes.trim() || undefined,
+      });
+    },
+    onSuccess: (created) => {
+      setDocFeedback({
+        tone: "ok",
+        text: `Catatan pembelian dari ${created.supplier_name} disimpan. Silakan unggah foto/PDF struk.`,
+      });
+      setSupplierName("");
+      setInvoiceNumber("");
+      setTotalAmountIdr("");
+      setDocNotes("");
+      qc.invalidateQueries({ queryKey: ["purchase-documents"] });
+      qc.invalidateQueries({ queryKey: ["manager-summary"] });
+    },
+    onError: (err) => {
+      setDocFeedback({
+        tone: "err",
+        text: err instanceof Error ? err.message : "Gagal mencatat pembelian.",
+      });
+    },
+  });
+
+  const uploadEvidenceMutation = useMutation({
+    mutationFn: ({ docId, file }: { docId: string; file: File }) =>
+      apiClient.uploadPurchaseEvidence(docId, file),
+    onSuccess: () => {
+      setDocFeedback({ tone: "ok", text: "Bukti struk/faktur berhasil diunggah." });
+      qc.invalidateQueries({ queryKey: ["purchase-documents"] });
+      qc.invalidateQueries({ queryKey: ["manager-summary"] });
+    },
+    onError: (err) => {
+      setDocFeedback({
+        tone: "err",
+        text: err instanceof Error ? err.message : "Gagal mengunggah berkas bukti.",
+      });
+    },
+  });
+
+  const reviewDocMutation = useMutation({
+    mutationFn: ({
+      docId,
+      decision,
+    }: {
+      docId: string;
+      decision: "VERIFIED_MATCH" | "DISCREPANCY_FLAGGED";
+    }) => apiClient.reviewPurchaseDocument(docId, { decision }),
+    onSuccess: (updated) => {
+      setDocFeedback({
+        tone: "ok",
+        text: `Status bukti pembelian "${updated.supplier_name}" diperbarui.`,
+      });
+      qc.invalidateQueries({ queryKey: ["purchase-documents"] });
+      qc.invalidateQueries({ queryKey: ["manager-summary"] });
+    },
+    onError: (err) => {
+      setDocFeedback({
+        tone: "err",
+        text: err instanceof Error ? err.message : "Gagal memverifikasi bukti.",
+      });
+    },
+  });
+
+  const createReceiptMutation = useMutation({
+    mutationFn: () => {
+      const qty = Number(receiptQty);
+      if (!receiptIngCode) throw new Error("Pilih bahan yang diterima.");
+      if (!Number.isFinite(qty) || qty <= 0) throw new Error("Jumlah diterima harus lebih dari 0.");
+      return apiClient.createGoodsReceipt({
+        dataset_version_id: activeDataset?.id,
+        purchase_document_id: receiptDocId || undefined,
+        ingredient_code: receiptIngCode,
+        lot_code: receiptLotCode.trim() || undefined,
+        received_quantity: qty,
+        unit: receiptUnit,
+        expiry_date: receiptExpiry || undefined,
+        supplier_name: receiptSupplier.trim() || undefined,
+        condition_status: receiptCondition,
+        notes: receiptNotes.trim() || undefined,
+      });
+    },
+    onSuccess: (res) => {
+      setReceiptFeedback({
+        tone: "ok",
+        text: `Penerimaan ${res.ingredient_name} (${(res.received_raw_g / 1000).toFixed(2)} kg, lot ${res.lot_code}) tercatat — stok siap pakai bertambah ${(res.usable_added_raw_g / 1000).toFixed(2)} kg.`,
+      });
+      setReceiptLotCode("");
+      setReceiptQty("");
+      setReceiptNotes("");
+      qc.invalidateQueries({ queryKey: ["goods-receipts"] });
+      qc.invalidateQueries({ queryKey: ["purchase-documents"] });
+      qc.invalidateQueries({ queryKey: ["inventory"] });
+      qc.invalidateQueries({ queryKey: ["inventory-detail"] });
+      refreshAll?.();
+    },
+    onError: (err) => {
+      setReceiptFeedback({
+        tone: "err",
+        text: err instanceof ApiError || err instanceof Error ? err.message : "Gagal mencatat penerimaan.",
+      });
+    },
+  });
+
+  const handleDownloadCsv = async () => {
     if (!selectedRun) return;
     setIsExporting(true);
     setExportMessage(null);
     try {
       const { blob, filename } = await apiClient.downloadRunCsv(selectedRun.run_id);
-      const url = window.URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = filename;
-      document.body.appendChild(a);
       a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
-      setExportMessage({
-        tone: "ok",
-        text: `Berhasil mengunduh file ${filename} (termasuk penanda data simulasi).`,
-      });
+      URL.revokeObjectURL(url);
+      setExportMessage({ tone: "ok", text: `Berhasil mengunduh ${filename}.` });
     } catch (err) {
       setExportMessage({
         tone: "err",
-        text: err instanceof ApiError ? err.message : "Gagal mengekspor CSV dari server.",
+        text: err instanceof Error ? err.message : "Gagal mengunduh CSV.",
       });
     } finally {
       setIsExporting(false);
     }
   };
 
-  if (isLoadingList || isLoadingRun) {
-    return (
-      <div className="space-y-6">
-        <PageHeader title="Daftar Belanja" />
-        <LoadingSkeleton rows={5} />
-      </div>
-    );
-  }
-
-  if (!selectedRun || !selectedRun.validation_passed) {
-    return (
-      <div className="space-y-6">
-        <PageHeader
-          title="Daftar Belanja"
-          subtitle="Rekap kebutuhan bahan mentah dari rencana menu yang sudah lolos verifikasi kelayakan."
-        />
-        <EmptyState
-          title="Daftar Belanja Belum Tersedia"
-          description="Daftar belanja dan ekspor CSV hanya dapat dibuat untuk rencana menu yang lolos verifikasi seluruh batasan."
-          action={
-            <Link
-              href="/simulator"
-              className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-[#0F766E] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#0B5F58]"
-            >
-              <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
-              <span>Buka Simulator</span>
-            </Link>
-          }
-        />
-      </div>
-    );
-  }
+  const materialItems = useMemo(() => {
+    const raw = isQC ? selectedRun?.material_usage ?? [] : shoppingQuery.data ?? [];
+    const prices = selectedRun?.input_snapshot?.prices_idr_per_g ?? {};
+    const q = search.trim().toLowerCase();
+    return raw
+      .filter((m) => !q || m.ingredient_name.toLowerCase().includes(q) || m.ingredient_code.toLowerCase().includes(q))
+      .map((item) => {
+        const priceG = canSeePrices ? prices[item.ingredient_code] ?? null : null;
+        return {
+          ...item,
+          estimatedCost: priceG !== null ? item.used_raw_g * priceG : null,
+          additionalPurchaseG: Math.max(0, item.used_raw_g - item.available_raw_g),
+        };
+      });
+  }, [isQC, selectedRun, shoppingQuery.data, search, canSeePrices]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
-        title="Daftar Belanja"
-        subtitle={`${selectedScenario?.name ?? "Rencana Aktif"} • ${
-          selectedRun.days_count ?? selectedRun.days.length
-        } hari × ${
-          selectedRun.servings_per_day ?? selectedScenario?.servings_per_day ?? "—"
-        } porsi/hari${
-          selectedRun.total_servings
-            ? ` = ${selectedRun.total_servings.toLocaleString("id-ID")} total porsi`
-            : ""
-        } • Total ${formatIDR(selectedRun.objective_total_idr)}`}
-        badges={<DatasetSimulationNotice compact simulationOnly={selectedRun.simulation_only} />}
-        actions={
-          <button
-            type="button"
-            disabled={isExporting}
-            onClick={handleExportCsv}
-            className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-[#0F766E] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#0B5F58] disabled:opacity-60"
-          >
-            <Download className="h-4 w-4" aria-hidden="true" />
-            <span>{isExporting ? "Menyiapkan CSV..." : "Ekspor CSV Rencana"}</span>
-          </button>
-        }
+        title="Belanja & Penerimaan Barang"
+        subtitle="Kelola kebutuhan belanja rencana menu, dokumentasi struk/faktur pembelian nyata, dan pencatatan barang masuk ke stok dapur."
+        badges={<DatasetSimulationNotice compact />}
       />
 
-      <DatasetSimulationNotice simulationOnly={selectedRun.simulation_only} />
-
-      {exportMessage && (
-        <div
-          role={exportMessage.tone === "err" ? "alert" : "status"}
-          className={`flex items-center gap-2.5 rounded-xl border px-4 py-3 text-sm ${
-            exportMessage.tone === "ok"
-              ? "border-[#BBE9CC] bg-[#ECFDF3] text-[#166534]"
-              : "border-[#F5C2C2] bg-[#FEF0F0] text-[#991B1B]"
+      {/* Shared 3-Tab Switcher */}
+      <div className="flex flex-wrap gap-2 border-b border-[#DCE6DE] pb-3">
+        <button
+          type="button"
+          onClick={() => setTab("needs")}
+          className={`inline-flex min-h-[40px] items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition ${
+            tab === "needs"
+              ? "bg-[#0F766E] text-white"
+              : "border border-[#DCE6DE] bg-white text-[#4A6170] hover:bg-[#F5F8F5]"
           }`}
         >
-          <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden="true" />
-          <span>{exportMessage.text}</span>
-        </div>
-      )}
+          <ShoppingBasket className="h-4 w-4" />
+          Kebutuhan Bahan
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab("purchases")}
+          className={`inline-flex min-h-[40px] items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition ${
+            tab === "purchases"
+              ? "bg-[#0F766E] text-white"
+              : "border border-[#DCE6DE] bg-white text-[#4A6170] hover:bg-[#F5F8F5]"
+          }`}
+        >
+          <FileText className="h-4 w-4" />
+          Pembelian & Bukti ({docsQuery.data?.length ?? 0})
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab("receipts")}
+          className={`inline-flex min-h-[40px] items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition ${
+            tab === "receipts"
+              ? "bg-[#0F766E] text-white"
+              : "border border-[#DCE6DE] bg-white text-[#4A6170] hover:bg-[#F5F8F5]"
+          }`}
+        >
+          <PackageCheck className="h-4 w-4" />
+          Penerimaan Barang ({receiptsQuery.data?.length ?? 0})
+        </button>
+      </div>
 
-      {/* Recovery Procurement Delta Banner (when plan originates from disruption recovery) */}
-      {matchedRecovery && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#B5DFDA] bg-[#F4FAF9] px-4 py-3 text-xs text-[#16354A]">
-          <div className="space-y-0.5">
-            <p className="font-bold text-[#0F766E]">
-              Terkait Pemulihan Gangguan: {matchedRecovery.title}
-            </p>
-            <p className="text-[#4A6170]">{matchedRecovery.disruption_summary}</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <a
-              href={apiClient.getRecoveryProcurementCsvUrl(
-                matchedRecovery.id,
-                matchedRecovery.min_cost.run_id === selectedRun.run_id
-                  ? "MIN_COST"
-                  : "MIN_DISRUPTION"
+      {/* TAB 1: KEBUTUHAN BAHAN */}
+      {tab === "needs" && (
+        <div className="space-y-4">
+          {isLoadingList || isLoadingRun ? (
+            <LoadingSkeleton rows={4} />
+          ) : !selectedRun || !selectedRun.validation_passed ? (
+            <EmptyState
+              title="Belum ada rencana menu aktif atau layak yang dipilih"
+              description="Pilih rencana menu terverifikasi dari pemilih di bagian atas untuk melihat daftar kebutuhan bahan."
+              action={
+                user?.active_role === "MENU_PLANNER" ? (
+                  <Link
+                    href="/menu-planning"
+                    className="inline-flex min-h-[40px] items-center rounded-xl bg-[#0F766E] px-4 text-xs font-semibold text-white"
+                  >
+                    Buka Rencana Menu
+                  </Link>
+                ) : undefined
+              }
+            />
+          ) : shoppingQuery.isError ? (
+            <ErrorState
+              message={shoppingQuery.error?.message ?? "Gagal memuat daftar kebutuhan."}
+              onRetry={() => shoppingQuery.refetch()}
+            />
+          ) : (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#DCE6DE] bg-white p-4">
+                <div className="relative min-w-[220px] flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <input
+                    type="text"
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder={`Cari bahan untuk ${selectedScenario?.name ?? "rencana ini"}...`}
+                    className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm"
+                  />
+                </div>
+                {canSeePrices && (
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadCsv()}
+                    disabled={isExporting}
+                    className="inline-flex min-h-[40px] items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                  >
+                    <Download className="h-4 w-4" />
+                    Ekspor CSV
+                  </button>
+                )}
+              </div>
+
+              {exportMessage && (
+                <p className="text-xs font-medium text-slate-700">{exportMessage.text}</p>
               )}
-              className="inline-flex min-h-[38px] items-center gap-1.5 rounded-lg bg-[#0F766E] px-3 py-1.5 font-semibold text-white hover:bg-[#0B5F58]"
-            >
-              <Download className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Unduh CSV Delta Belanja Pemulihan</span>
-            </a>
-            {user?.active_role === "MENU_PLANNER" && (
-              <Link
-                href={`/simulator?eventId=${matchedRecovery.id}`}
-                className="inline-flex min-h-[38px] items-center gap-1 rounded-lg border border-[#B5DFDA] bg-white px-3 py-1.5 font-semibold text-[#0F766E]"
-              >
-                <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Buka Pemulihan</span>
-              </Link>
-            )}
-          </div>
+
+              <div className="overflow-x-auto rounded-xl border border-[#DCE6DE] bg-white">
+                <table className="w-full border-collapse text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                      <th className="px-4 py-3">Bahan</th>
+                      <th className="px-4 py-3">Kebutuhan Rencana</th>
+                      <th className="px-4 py-3">Stok Terikat Rencana</th>
+                      <th className="px-4 py-3">Tambahan Perlu Dibeli</th>
+                      {canSeePrices && <th className="px-4 py-3">Estimasi Biaya</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {materialItems.map((item) => (
+                      <tr key={item.ingredient_code} className="border-b border-slate-100">
+                        <td className="px-4 py-3 font-semibold text-slate-900">
+                          {item.ingredient_name}{" "}
+                          <span className="font-normal text-slate-500">({item.ingredient_code})</span>
+                        </td>
+                        <td className="px-4 py-3 font-mono font-semibold">
+                          {formatWeightFromGrams(item.used_raw_g)}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-slate-600">
+                          {formatWeightFromGrams(item.available_raw_g)}
+                        </td>
+                        <td className="px-4 py-3 font-mono font-semibold text-amber-800">
+                          {item.additionalPurchaseG > 0
+                            ? formatWeightFromGrams(item.additionalPurchaseG)
+                            : "Cukup di stok"}
+                        </td>
+                        {canSeePrices && (
+                          <td className="px-4 py-3 font-mono text-slate-800">
+                            {formatIDR(item.estimatedCost)}
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Clarification Banner */}
-      <div className="flex items-start gap-2.5 rounded-xl border border-[#DCE6DE] bg-white px-4 py-3 text-xs text-[#4A6170]">
-        <Info className="mt-0.5 h-4 w-4 shrink-0 text-[#0F766E]" aria-hidden="true" />
-        <p className="leading-relaxed">
-          <strong className="text-[#16354A]">Perbedaan Total Kebutuhan vs Tambahan Beli:</strong>{" "}
-          <em>Total Kebutuhan</em> adalah seluruh berat bahan mentah yang dipakai selama rencana.
-          Karena seluruh kebutuhan berada dalam batas stok tersedia pada skenario ini, kolom{" "}
-          <em>Tambahan Pembelian Mendesak</em> menunjukkan kekurangan terhadap stok tercatat (0 bila
-          stok mencukupi). Daftar ini merupakan alat bantu perencanaan, <strong>bukan</strong>{" "}
-          pemesanan resmi ke pemasok.
-        </p>
-      </div>
+      {/* TAB 2: PEMBELIAN & BUKTI */}
+      {tab === "purchases" && (
+        <div className="space-y-4">
+          {docFeedback && (
+            <div
+              className={`rounded-lg border px-4 py-2.5 text-xs font-medium ${
+                docFeedback.tone === "ok"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                  : "border-rose-200 bg-rose-50 text-rose-900"
+              }`}
+            >
+              {docFeedback.text}
+            </div>
+          )}
 
-      {/* Search & Sort Controls */}
-      <div className="flex flex-col gap-3 rounded-2xl border border-[#DCE6DE] bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative flex-1 sm:max-w-xs">
-          <Search
-            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#647A87]"
-            aria-hidden="true"
-          />
-          <label htmlFor="shop-search" className="sr-only">
-            Cari bahan belanja
-          </label>
-          <input
-            id="shop-search"
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Cari bahan belanja..."
-            className="h-10 w-full rounded-xl border border-[#DCE6DE] bg-white pl-9 pr-3 text-sm text-[#16354A]"
-          />
+          {isCustodian ? (
+            <section className="rounded-xl border border-[#DCE6DE] bg-white p-4 shadow-sm">
+              <h2 className="text-sm font-bold text-[#16354A]">
+                Catat Pembelian Nyata (Manual — Tanpa Isi Otomatis dari Estimasi)
+              </h2>
+              <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-600">
+                <Info className="h-3.5 w-3.5 text-[#0F766E]" />
+                Isi nominal & pemasok sesuai faktur/struk pembelian sebenarnya.
+              </p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700">
+                    Nama Pemasok *
+                  </label>
+                  <input
+                    type="text"
+                    value={supplierName}
+                    onChange={(e) => setSupplierName(e.target.value)}
+                    placeholder="Contoh: CV Sumber Pangan"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700">
+                    No. Faktur / Nota
+                  </label>
+                  <input
+                    type="text"
+                    value={invoiceNumber}
+                    onChange={(e) => setInvoiceNumber(e.target.value)}
+                    placeholder="Opsional"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700">
+                    Tanggal Belanja (WIB)
+                  </label>
+                  <input
+                    type="date"
+                    value={purchaseDate}
+                    onChange={(e) => setPurchaseDate(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700">
+                    Total Nominal Struk (Rp)
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={totalAmountIdr}
+                    onChange={(e) => setTotalAmountIdr(e.target.value)}
+                    placeholder="Kosongkan jika belum ada"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs"
+                  />
+                </div>
+                <div className="sm:col-span-2 lg:col-span-4">
+                  <label className="block text-[11px] font-semibold text-slate-700">Catatan</label>
+                  <input
+                    type="text"
+                    value={docNotes}
+                    onChange={(e) => setDocNotes(e.target.value)}
+                    placeholder="Catatan singkat pengiriman atau kelengkapan..."
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-xs"
+                  />
+                </div>
+              </div>
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => createDocMutation.mutate()}
+                  disabled={createDocMutation.isPending}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#0F766E] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0B5F58]"
+                >
+                  {createDocMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Simpan Catatan Pembelian
+                </button>
+              </div>
+            </section>
+          ) : (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+              Pencatatan pembelian & unggah struk dilakukan oleh Petugas QC Pengelola Stok aktif. Kepala Dapur memverifikasi kecocokan bukti di daftar bawah ini.
+            </div>
+          )}
+
+          {docsQuery.isLoading ? (
+            <LoadingSkeleton rows={3} />
+          ) : (docsQuery.data?.length ?? 0) === 0 ? (
+            <EmptyState
+              title="Belum ada catatan pembelian"
+              description="Petugas QC Pengelola Stok dapat mencatat pembelian dan mengunggah foto atau PDF faktur di sini."
+            />
+          ) : (
+            <div className="space-y-3" data-testid="purchase-documents-list">
+              {docsQuery.data!.map((doc) => {
+                const badge = evidenceBadge(doc.evidence_status);
+                return (
+                  <div key={doc.id} className="rounded-xl border border-[#DCE6DE] bg-white p-4 text-xs">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-bold text-slate-900">{doc.supplier_name}</span>
+                          <StatusBadge label={badge.label} tone={badge.tone} />
+                        </div>
+                        <p className="mt-1 text-slate-600">
+                          Tanggal: {formatJakartaDate(doc.purchase_date)}
+                          {doc.invoice_number ? ` · Nota ${doc.invoice_number}` : ""}
+                          {doc.total_amount_idr != null ? ` · ${formatIDR(doc.total_amount_idr)}` : ""}
+                        </p>
+                      </div>
+                      {doc.has_evidence_file && doc.evidence_url && (
+                        <a
+                          href={apiClient.getProtectedImageUrl(doc.evidence_url)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-1.5 font-semibold text-[#0F766E] hover:bg-slate-50"
+                        >
+                          <FileText className="h-3.5 w-3.5" />
+                          Lihat Bukti ({doc.document_original_filename})
+                        </a>
+                      )}
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap items-center gap-2">
+                      {isCustodian && (
+                        <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-[#B5DFDA] bg-[#EBF6F5] px-3 py-1.5 font-semibold text-[#0F766E] hover:bg-[#DDF0EE]">
+                          <Upload className="h-3.5 w-3.5" />
+                          <span>
+                            {doc.has_evidence_file ? "Ganti Bukti (Foto/PDF)" : "Unggah Bukti (Foto/PDF)"}
+                          </span>
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp,application/pdf"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) uploadEvidenceMutation.mutate({ docId: doc.id, file });
+                            }}
+                          />
+                        </label>
+                      )}
+
+                      {isManager && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={!doc.has_evidence_file || reviewDocMutation.isPending}
+                            onClick={() =>
+                              reviewDocMutation.mutate({
+                                docId: doc.id,
+                                decision: "VERIFIED_MATCH",
+                              })
+                            }
+                            className="inline-flex items-center gap-1 rounded-lg bg-emerald-700 px-3 py-1.5 font-semibold text-white hover:bg-emerald-800 disabled:opacity-40"
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            Tandai Cocok
+                          </button>
+                          <button
+                            type="button"
+                            disabled={reviewDocMutation.isPending}
+                            onClick={() =>
+                              reviewDocMutation.mutate({
+                                docId: doc.id,
+                                decision: "DISCREPANCY_FLAGGED",
+                              })
+                            }
+                            className="inline-flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 font-semibold text-rose-800 hover:bg-rose-100"
+                          >
+                            <XCircle className="h-3.5 w-3.5" />
+                            Tandai Ada Selisih
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
+      )}
 
-        <div className="flex items-center gap-2">
-          <ArrowUpDown className="h-4 w-4 text-[#647A87]" aria-hidden="true" />
-          <label htmlFor="shop-sort" className="text-xs font-semibold text-[#4A6170]">
-            Urutkan:
-          </label>
-          <select
-            id="shop-sort"
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-            className="h-10 rounded-xl border border-[#DCE6DE] bg-white px-3 text-xs font-semibold text-[#16354A]"
-          >
-            <option value="qty_desc">Kebutuhan Terbanyak</option>
-            <option value="cost_desc">Estimasi Biaya Tertinggi</option>
-            <option value="name_asc">Nama Bahan (A–Z)</option>
-          </select>
-        </div>
-      </div>
+      {/* TAB 3: PENERIMAAN BARANG */}
+      {tab === "receipts" && (
+        <div className="space-y-4">
+          {receiptFeedback && (
+            <div
+              className={`rounded-lg border px-4 py-2.5 text-xs font-medium ${
+                receiptFeedback.tone === "ok"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                  : "border-rose-200 bg-rose-50 text-rose-900"
+              }`}
+            >
+              {receiptFeedback.text}
+            </div>
+          )}
 
-      {shoppingQuery.isLoading ? (
-        <LoadingSkeleton rows={6} />
-      ) : shoppingQuery.isError ? (
-        <ErrorState
-          message={(shoppingQuery.error as Error).message}
-          onRetry={() => {
-            shoppingQuery.refetch();
-            refreshAll();
-          }}
-        />
-      ) : (
-        <div className="overflow-hidden rounded-2xl border border-[#DCE6DE] bg-white shadow-[0_1px_2px_rgba(22,53,74,0.04)]">
-          <div className="p-3 md:hidden">
-            <ul className="space-y-2" aria-label="Kebutuhan bahan per item">
-              {enrichedItems.map((item) => (
-                <li key={item.ingredient_code} className="rounded-xl border border-[#DCE6DE] p-3">
-                  <h3 className="break-words text-sm font-bold">{item.ingredient_name}</h3>
-                  <p className="text-xs text-[#647A87]">{item.ingredient_code} • Pemakaian stok {formatPercent(item.utilPct, 0)}</p>
-                  <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
-                    <div><dt className="text-[#647A87]">Total kebutuhan</dt><dd className="font-semibold">{formatWeightFromGrams(item.used_raw_g)}</dd></div>
-                    <div><dt className="text-[#647A87]">Stok tercatat</dt><dd>{formatWeightFromGrams(item.available_raw_g)}</dd></div>
-                    <div><dt className="text-[#647A87]">Tambahan beli</dt><dd>{item.additionalPurchaseG > 0 ? formatWeightFromGrams(item.additionalPurchaseG) : "0 gram (Cukup)"}</dd></div>
-                    <div><dt className="text-[#647A87]">Harga acuan</dt><dd>{item.pricePerKg !== null ? `${formatIDR(item.pricePerKg)}/kg` : "—"}</dd></div>
-                    <div><dt className="text-[#647A87]">Estimasi biaya</dt><dd className="font-semibold text-[#0F766E]">{formatIDR(item.estimatedCost)}</dd></div>
-                  </dl>
-                </li>
+          {isCustodian ? (
+            <section className="rounded-xl border border-[#DCE6DE] bg-white p-4 shadow-sm">
+              <h2 className="text-sm font-bold text-[#16354A]">
+                Catat Penerimaan Barang Fisik ke Stok Dapur
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-600">
+                Hanya barang berkondisi Baik dengan tanggal kedaluwarsa yang masuk ke stok siap pakai. Tanpa kedaluwarsa atau rusak tidak dihitung siap pakai.
+              </p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700">Bahan *</label>
+                  <select
+                    value={receiptIngCode}
+                    onChange={(e) => setReceiptIngCode(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs"
+                  >
+                    {(inventoryQuery.data?.items ?? []).map((i) => (
+                      <option key={i.code} value={i.code}>
+                        {i.name} ({i.code})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700">
+                    Jumlah Diterima *
+                  </label>
+                  <div className="mt-1 flex gap-1.5">
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      value={receiptQty}
+                      onChange={(e) => setReceiptQty(e.target.value)}
+                      placeholder="10"
+                      className="w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs"
+                    />
+                    <select
+                      value={receiptUnit}
+                      onChange={(e) => setReceiptUnit(e.target.value)}
+                      className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs"
+                    >
+                      <option value="kg">kg</option>
+                      <option value="g">g</option>
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700">
+                    Tanggal Kedaluwarsa
+                  </label>
+                  <input
+                    type="date"
+                    value={receiptExpiry}
+                    onChange={(e) => setReceiptExpiry(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700">Kondisi *</label>
+                  <select
+                    value={receiptCondition}
+                    onChange={(e) => setReceiptCondition(e.target.value as GoodsConditionEnum)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs"
+                  >
+                    <option value="GOOD">Baik (Layak Pakai)</option>
+                    <option value="DAMAGED">Rusak</option>
+                    <option value="QUARANTINED">Karantina</option>
+                    <option value="REJECTED">Ditolak</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700">
+                    Terkait Catatan Belanja (opsional)
+                  </label>
+                  <select
+                    value={receiptDocId}
+                    onChange={(e) => setReceiptDocId(e.target.value)}
+                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs"
+                  >
+                    <option value="">— Tanpa tautan dokumen —</option>
+                    {(docsQuery.data ?? []).map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.supplier_name} ({formatJakartaDate(d.purchase_date)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700">Kode Lot</label>
+                  <input
+                    type="text"
+                    value={receiptLotCode}
+                    onChange={(e) => setReceiptLotCode(e.target.value)}
+                    placeholder="Otomatis jika dikosongkan"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700">
+                    Pemasok Nyata
+                  </label>
+                  <input
+                    type="text"
+                    value={receiptSupplier}
+                    onChange={(e) => setReceiptSupplier(e.target.value)}
+                    placeholder="Sesuai surat jalan"
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700">Catatan</label>
+                  <input
+                    type="text"
+                    value={receiptNotes}
+                    onChange={(e) => setReceiptNotes(e.target.value)}
+                    placeholder="Suhu / kondisi kemasan..."
+                    className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-2 text-xs"
+                  />
+                </div>
+              </div>
+              <div className="mt-3 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => createReceiptMutation.mutate()}
+                  disabled={createReceiptMutation.isPending}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#0F766E] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0B5F58]"
+                >
+                  {createReceiptMutation.isPending && (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  )}
+                  Catat Penerimaan Barang
+                </button>
+              </div>
+            </section>
+          ) : (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
+              Pencatatan penerimaan barang ke buku besar stok hanya dapat dilakukan oleh Petugas QC Pengelola Stok aktif.
+            </div>
+          )}
+
+          {receiptsQuery.isLoading ? (
+            <LoadingSkeleton rows={3} />
+          ) : (receiptsQuery.data?.length ?? 0) === 0 ? (
+            <EmptyState
+              title="Belum ada catatan penerimaan barang"
+              description="Penerimaan barang baru yang dicatat oleh Petugas QC Pengelola Stok akan langsung masuk ke tabel stok."
+            />
+          ) : (
+            <div className="space-y-2.5" data-testid="goods-receipts-list">
+              {receiptsQuery.data!.map((gr) => (
+                <div key={gr.id} className="rounded-xl border border-[#DCE6DE] bg-white p-4 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-sm font-bold text-slate-900">
+                      {gr.ingredient_name} — {(gr.received_raw_g / 1000).toFixed(2)} kg
+                    </span>
+                    <StatusBadge
+                      label={conditionLabel(gr.condition_status)}
+                      tone={gr.usable_added_raw_g > 0 ? "success" : "warning"}
+                    />
+                  </div>
+                  <p className="mt-1 text-slate-600">
+                    Lot <span className="font-mono font-semibold">{gr.lot_code}</span> · Pemasok:{" "}
+                    {gr.supplier_name ?? "Belum dicatat"} · Diterima{" "}
+                    {formatJakartaDateTime(gr.received_at)} · Siap pakai bertambah{" "}
+                    <strong>{(gr.usable_added_raw_g / 1000).toFixed(2)} kg</strong>
+                  </p>
+                </div>
               ))}
-            </ul>
-            <p className="mt-3 rounded-xl bg-[#F5F8F5] p-3 text-sm font-semibold">
-              Total estimasi ({selectedRun.days.length} hari) <span className="block text-[#0F766E]">{formatIDR(selectedRun.objective_total_idr)}</span>
-            </p>
-          </div>
-          <div className="hidden max-w-full overflow-x-auto md:block">
-            <table className="w-full text-left text-xs">
-              <thead className="border-b border-[#DCE6DE] bg-[#F5F8F5] text-[#4A6170]">
-                <tr>
-                  <th className="px-4 py-3 font-semibold">Bahan Pangan</th>
-                  <th className="px-4 py-3 text-right font-semibold">Total Kebutuhan</th>
-                  <th className="px-4 py-3 text-right font-semibold">Stok Tercatat</th>
-                  <th className="px-4 py-3 text-right font-semibold">Tambahan Beli</th>
-                  <th className="px-4 py-3 text-right font-semibold">Harga Acuan</th>
-                  <th className="px-4 py-3 text-right font-semibold">Estimasi Biaya</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#EEF3EE] tabular-nums">
-                {enrichedItems.map((m) => (
-                  <tr key={m.ingredient_code} className="hover:bg-[#F5F8F5]/60">
-                    <td className="px-4 py-3">
-                      <span className="block font-semibold text-[#16354A]">
-                        {m.ingredient_name}
-                      </span>
-                      <span className="text-[11px] text-[#647A87]">
-                        {m.ingredient_code} • Pemakaian stok {formatPercent(m.utilPct, 0)}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right font-bold text-[#16354A]">
-                      {formatWeightFromGrams(m.used_raw_g)}
-                    </td>
-                    <td className="px-4 py-3 text-right text-[#4A6170]">
-                      {formatWeightFromGrams(m.available_raw_g)}
-                    </td>
-                    <td className="px-4 py-3 text-right text-[#4A6170]">
-                      {m.additionalPurchaseG > 0
-                        ? formatWeightFromGrams(m.additionalPurchaseG)
-                        : "0 gram (Cukup)"}
-                    </td>
-                    <td className="px-4 py-3 text-right text-[#4A6170]">
-                      {m.pricePerKg !== null ? `${formatIDR(m.pricePerKg)}/kg` : "—"}
-                    </td>
-                    <td className="px-4 py-3 text-right font-semibold text-[#0F766E]">
-                      {formatIDR(m.estimatedCost)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot className="border-t border-[#DCE6DE] bg-[#F5F8F5] font-bold text-[#16354A] tabular-nums">
-                <tr>
-                  <td colSpan={5} className="px-4 py-3 text-right">
-                    Total Estimasi Biaya Pengadaan ({selectedRun.days.length} Hari)
-                  </td>
-                  <td className="px-4 py-3 text-right text-sm text-[#0F766E]">
-                    {formatIDR(selectedRun.objective_total_idr)}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
+            </div>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+export default function ShoppingListPage() {
+  return (
+    <Suspense fallback={<LoadingSkeleton rows={4} />}>
+      <ShoppingListContent />
+    </Suspense>
   );
 }

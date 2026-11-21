@@ -24,6 +24,7 @@ from app.auth.schemas import (
     KitchenMembershipInfo,
     LoginRequest,
     RoleEnum,
+    StockCustodianSummary,
     SwitchKitchenRequest,
 )
 from app.auth.rate_limit import RateLimiter
@@ -34,6 +35,7 @@ from app.auth.security import (
     hash_session_token,
     verify_password,
 )
+from app.custodian.lookup import resolve_active_custodian
 from app.db.models import AuditEventORM, AuthSessionORM, UserORM
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -54,6 +56,29 @@ def _cookie_secure_flag() -> bool:
     )
 
 
+def _resolve_custodian_flags(
+    session: Session,
+    *,
+    kitchen_id: UUID,
+    user_id: UUID,
+    role: RoleEnum,
+) -> tuple[bool, StockCustodianSummary]:
+    resolved = resolve_active_custodian(session, kitchen_id)
+    summary = StockCustodianSummary(
+        is_assigned=resolved is not None,
+        custodian_user_id=UUID(resolved[1].id) if resolved else None,
+        custodian_username=resolved[1].username if resolved else None,
+        custodian_full_name=resolved[1].full_name if resolved else None,
+        effective_until=resolved[0].effective_until if resolved else None,
+    )
+    is_custodian = bool(
+        role == RoleEnum.QC_OFFICER
+        and resolved is not None
+        and resolved[0].custodian_user_id == str(user_id)
+    )
+    return is_custodian, summary
+
+
 def _build_auth_response(auth: AuthContext) -> AuthUserResponse:
     return AuthUserResponse(
         user_id=auth.user_id,
@@ -65,6 +90,8 @@ def _build_auth_response(auth: AuthContext) -> AuthUserResponse:
         active_kitchen_name=auth.kitchen_name,
         active_role=auth.role,
         csrf_token=auth.csrf_token,
+        is_active_stock_custodian=auth.is_active_stock_custodian,
+        stock_custodian=auth.stock_custodian,
         memberships=auth.memberships,
     )
 
@@ -173,6 +200,13 @@ def api_login(
         path="/",
     )
 
+    is_custodian, custodian_summary = _resolve_custodian_flags(
+        session,
+        kitchen_id=chosen.kitchen_id,
+        user_id=UUID(user.id),
+        role=chosen.role,
+    )
+
     return AuthUserResponse(
         user_id=UUID(user.id),
         username=user.username,
@@ -183,6 +217,8 @@ def api_login(
         active_kitchen_name=chosen.kitchen_name,
         active_role=chosen.role,
         csrf_token=csrf_token,
+        is_active_stock_custodian=is_custodian,
+        stock_custodian=custodian_summary,
         memberships=active_memberships,
     )
 
@@ -246,6 +282,13 @@ def api_switch_kitchen(
     )
     session.commit()
 
+    is_custodian, custodian_summary = _resolve_custodian_flags(
+        session,
+        kitchen_id=target.kitchen_id,
+        user_id=auth.user_id,
+        role=target.role,
+    )
+
     return AuthUserResponse(
         user_id=auth.user_id,
         username=auth.username,
@@ -256,6 +299,8 @@ def api_switch_kitchen(
         active_kitchen_name=target.kitchen_name,
         active_role=target.role,
         csrf_token=auth.csrf_token,
+        is_active_stock_custodian=is_custodian,
+        stock_custodian=custodian_summary,
         memberships=auth.memberships,
     )
 

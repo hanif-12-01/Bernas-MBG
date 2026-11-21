@@ -1,19 +1,20 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowRight,
   Camera,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Loader2,
   Lock,
   ShieldAlert,
-  Sparkles,
   Trash2,
 } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ErrorState } from "@/components/feedback/FeedbackStates";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -21,12 +22,11 @@ import { useAuth } from "@/hooks/useAuth";
 import { useWorkspace } from "@/hooks/useWorkspace";
 import { apiClient, ApiError } from "@/lib/api/client";
 import {
-  formatDateTimeID,
   formatExposureStatusLabel,
   formatIncidentCategoryLabel,
   formatIncidentStatus,
-  formatWeightFromGrams,
 } from "@/lib/formatters/indonesian";
+import { formatJakartaDateTime } from "@/lib/formatters/jakartaDate";
 import type {
   IncidentCategoryEnum,
   IncidentSeverityEnum,
@@ -36,42 +36,69 @@ import type {
 interface IncidentPanelProps {
   defaultDatasetId?: string;
   compact?: boolean;
+  preselectedLotCode?: string | null;
   onIncidentChanged?: () => void;
   onNavigate?: (href: string) => void;
 }
 
-const INCIDENT_DEMO_DATASET_ID = "55555555-5555-4555-8555-555555555555";
+const INCIDENT_CATEGORIES: IncidentCategoryEnum[] = [
+  "SPOILAGE",
+  "SUSPECTED_CONTAMINATION",
+  "DAMAGED_PACKAGING",
+  "ABNORMAL_ODOR_APPEARANCE",
+  "SUPPLIER_RECALL",
+  "TEMPERATURE_EXCURSION",
+  "UNKNOWN_CONDITION",
+];
 
 export function IncidentPanel({
   defaultDatasetId,
   compact = false,
+  preselectedLotCode = null,
   onIncidentChanged,
   onNavigate,
 }: IncidentPanelProps) {
   const { user } = useAuth();
-  const { datasets, activeDataset } = useWorkspace();
+  const { activeDataset, refreshAll } = useWorkspace();
   const qc = useQueryClient();
 
   const kitchenId = user?.active_kitchen_id;
-  const role = user?.active_role;
+  const isCustodian = Boolean(user?.active_role === "QC_OFFICER" && user?.is_active_stock_custodian);
+  const effectiveDatasetId = defaultDatasetId || activeDataset?.id || "";
 
-  const [showForm, setShowForm] = useState(!compact);
-  const [selectedDatasetId, setSelectedDatasetId] = useState<string>(defaultDatasetId || "");
-  const effectiveDatasetId =
-    selectedDatasetId ||
-    defaultDatasetId ||
-    datasets.find((d) => d.id === INCIDENT_DEMO_DATASET_ID)?.id ||
-    activeDataset?.id ||
-    "";
-
-  const [title, setTitle] = useState("");
-  const [category, setCategory] = useState<IncidentCategoryEnum>("SPOILAGE");
-  const [severity, setSeverity] = useState<IncidentSeverityEnum>("CRITICAL");
-  const [notes, setNotes] = useState("");
+  // Default simplified 2-field flow: Lot/Bahan + Kondisi
   const [selectedLotCodes, setSelectedLotCodes] = useState<string[]>([]);
+  const [category, setCategory] = useState<IncidentCategoryEnum>("SPOILAGE");
+  const [showOptionalDetails, setShowOptionalDetails] = useState(false);
+
+  // Optional collapsed fields
+  const [title, setTitle] = useState("");
+  const [severity, setSeverity] = useState<IncidentSeverityEnum>("HIGH");
+  const [notes, setNotes] = useState("");
+  const [supplierName, setSupplierName] = useState("");
   const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
-  const [confirmDisposeId, setConfirmDisposeId] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
+
+  // Decoupled upload retry state
+  const [pendingRetryUpload, setPendingRetryUpload] = useState<{
+    incidentId: string;
+    file: File;
+    errorMessage: string;
+  } | null>(null);
+
+  const [feedback, setFeedback] = useState<{ tone: "ok" | "warn" | "err"; text: string } | null>(
+    null
+  );
+  const [lastCreatedIncident, setLastCreatedIncident] = useState<IngredientIncidentResponse | null>(
+    null
+  );
+
+  useEffect(() => {
+    if (preselectedLotCode) {
+      setSelectedLotCodes((prev) =>
+        prev.includes(preselectedLotCode) ? prev : [...prev, preselectedLotCode]
+      );
+    }
+  }, [preselectedLotCode]);
 
   const incidentsQuery = useQuery({
     queryKey: ["incidents", kitchenId],
@@ -89,578 +116,505 @@ export function IncidentPanel({
         ? apiClient.getInventoryLots(effectiveDatasetId || undefined)
         : Promise.resolve({
             kitchen_id: kitchenId || "",
-            dataset_version_id: effectiveDatasetId || "",
+            dataset_version_id: effectiveDatasetId,
             production_date: new Date().toISOString(),
             items: [],
           }),
-    enabled: Boolean(user && effectiveDatasetId),
+    enabled: Boolean(user && isCustodian),
   });
 
-  const candidateLots = useMemo(() => {
-    const rows: Array<{
-      lotId: string;
-      lotCode: string;
-      ingredientCode: string;
-      ingredientName: string;
-      usableG: number;
-      recordedG: number;
-      safetyHoldStatus: string;
-      notes?: string | null;
+  const flatLots = useMemo(() => {
+    const out: Array<{
+      lot_code: string;
+      ingredient_code: string;
+      ingredient_name: string;
+      recorded_kg: number;
+      safety_hold_status: string;
     }> = [];
-    for (const item of lotsQuery.data?.items ?? []) {
-      for (const lot of item.lots ?? []) {
-        rows.push({
-          lotId: lot.id,
-          lotCode: lot.lot_code,
-          ingredientCode: item.ingredient_code,
-          ingredientName: item.ingredient_name,
-          usableG: lot.usable_raw_g,
-          recordedG: lot.recorded_raw_g,
-          safetyHoldStatus: lot.safety_hold_status || "NONE",
-          notes: lot.notes,
+    for (const entry of lotsQuery.data?.items ?? []) {
+      for (const lot of entry.lots ?? []) {
+        out.push({
+          lot_code: lot.lot_code,
+          ingredient_code: entry.ingredient_code,
+          ingredient_name: entry.ingredient_name,
+          recorded_kg: lot.recorded_raw_g / 1000,
+          safety_hold_status: lot.safety_hold_status,
         });
       }
     }
-    return rows.sort((a, b) => {
-      const a3c = a.lotCode.startsWith("LOT-3C-") ? 0 : 1;
-      const b3c = b.lotCode.startsWith("LOT-3C-") ? 0 : 1;
-      if (a3c !== b3c) return a3c - b3c;
-      return a.ingredientName.localeCompare(b.ingredientName, "id");
-    });
+    return out;
   }, [lotsQuery.data]);
 
-  const toggleLotCode = (lotCode: string) => {
+  const invalidateAll = () => {
+    qc.invalidateQueries({ queryKey: ["incidents"] });
+    qc.invalidateQueries({ queryKey: ["inventory"] });
+    qc.invalidateQueries({ queryKey: ["inventory-lots"] });
+    qc.invalidateQueries({ queryKey: ["effective-operational-plan"] });
+    qc.invalidateQueries({ queryKey: ["operational-plans"] });
+    qc.invalidateQueries({ queryKey: ["qc-summary"] });
+    qc.invalidateQueries({ queryKey: ["manager-summary"] });
+    qc.invalidateQueries({ queryKey: ["planner-summary"] });
+    refreshAll?.();
+    onIncidentChanged?.();
+  };
+
+  const reportMutation = useMutation({
+    mutationFn: async () => {
+      if (selectedLotCodes.length === 0) {
+        throw new Error("Pilih minimal 1 lot bahan untuk langsung ditahan keamanannya.");
+      }
+
+      // Step 1: Atomic incident report & safety hold (ONLY 2 mandatory inputs; optional omitted if blank)
+      const created = await apiClient.createIncident({
+        dataset_version_id: effectiveDatasetId || undefined,
+        category,
+        severity,
+        title: title.trim() || undefined,
+        notes: notes.trim() || undefined,
+        supplier_name: supplierName.trim() || undefined,
+        affected_lots: selectedLotCodes.map((lotCode) => ({ lot_code: lotCode })),
+        auto_hold_matching_lots: false,
+        idempotency_key: `INC-UI-${Date.now()}-${selectedLotCodes.join("-")}`,
+      });
+
+      // Step 2: Decoupled optional evidence photo upload (never rolls back hold if network upload fails!)
+      let uploadWarning: string | null = null;
+      let latestIncident = created;
+      if (evidenceFile && typeof apiClient.uploadIncidentImage === "function") {
+        try {
+          await apiClient.uploadIncidentImage(created.id, evidenceFile);
+          latestIncident = await apiClient.getIncident(created.id);
+        } catch (uploadErr) {
+          uploadWarning =
+            uploadErr instanceof Error ? uploadErr.message : "Gagal mengunggah foto bukti.";
+        }
+      }
+
+      return { created: latestIncident, uploadWarning };
+    },
+    onSuccess: ({ created, uploadWarning }) => {
+      setLastCreatedIncident(created);
+      setSelectedLotCodes([]);
+      setTitle("");
+      setNotes("");
+      setSupplierName("");
+      if (uploadWarning && evidenceFile) {
+        setPendingRetryUpload({
+          incidentId: created.id,
+          file: evidenceFile,
+          errorMessage: uploadWarning,
+        });
+        setFeedback({
+          tone: "warn",
+          text: "Laporan berhasil dan bahan sudah ditahan. Foto belum berhasil diunggah. Coba unggah ulang.",
+        });
+      } else {
+        setPendingRetryUpload(null);
+        setEvidenceFile(null);
+        setFeedback({
+          tone: "ok",
+          text: `Bahan langsung ditahan (${created.total_held_kg.toFixed(2)} kg pada ${created.affected_lots.length} lot).`,
+        });
+      }
+      invalidateAll();
+    },
+    onError: (err) => {
+      setFeedback({
+        tone: "err",
+        text: err instanceof ApiError || err instanceof Error ? err.message : "Gagal menahan bahan.",
+      });
+    },
+  });
+
+  const retryUploadMutation = useMutation({
+    mutationFn: async () => {
+      if (!pendingRetryUpload) return;
+      await apiClient.uploadIncidentImage(pendingRetryUpload.incidentId, pendingRetryUpload.file);
+      return apiClient.getIncident(pendingRetryUpload.incidentId);
+    },
+    onSuccess: (updated) => {
+      if (updated) setLastCreatedIncident(updated);
+      setPendingRetryUpload(null);
+      setEvidenceFile(null);
+      setFeedback({
+        tone: "ok",
+        text: "Foto bukti tambahan berhasil diunggah dan terpasang pada laporan penahanan.",
+      });
+      invalidateAll();
+    },
+    onError: (err) => {
+      setFeedback({
+        tone: "warn",
+        text: `Laporan berhasil dan bahan sudah ditahan. Foto belum berhasil diunggah (${
+          err instanceof Error ? err.message : "coba lagi"
+        }).`,
+      });
+    },
+  });
+
+  const disposalExecMutation = useMutation({
+    mutationFn: (incidentId: string) => apiClient.recordIncidentDisposal(incidentId),
+    onSuccess: (updated) => {
+      setLastCreatedIncident(updated);
+      setFeedback({
+        tone: "ok",
+        text: `Pemusnahan fisik lot pada insiden "${updated.title}" resmi dicatat ke buku besar stok.`,
+      });
+      invalidateAll();
+    },
+    onError: (err) => {
+      setFeedback({
+        tone: "err",
+        text: err instanceof Error ? err.message : "Gagal mencatat pemusnahan fisik.",
+      });
+    },
+  });
+
+  const toggleLot = (lotCode: string) => {
     setSelectedLotCodes((prev) =>
       prev.includes(lotCode) ? prev.filter((c) => c !== lotCode) : [...prev, lotCode]
     );
   };
 
-  const invalidateAll = () => {
-    qc.invalidateQueries({ queryKey: ["incidents"] });
-    qc.invalidateQueries({ queryKey: ["inventory-lots"] });
-    qc.invalidateQueries({ queryKey: ["inventory"] });
-    qc.invalidateQueries({ queryKey: ["operational-plans"] });
-    qc.invalidateQueries({ queryKey: ["operational-plan-effective"] });
-    qc.invalidateQueries({ queryKey: ["manager-summary"] });
-    qc.invalidateQueries({ queryKey: ["qc-summary"] });
-    qc.invalidateQueries({ queryKey: ["menu-reviews"] });
-    onIncidentChanged?.();
-  };
+  const activeIncidents = useMemo(
+    () =>
+      (incidentsQuery.data ?? []).filter(
+        (inc) => inc.status !== "CLOSED" && inc.disposal_executed_at == null
+      ),
+    [incidentsQuery.data]
+  );
 
-  const createMutation = useMutation({
-    mutationFn: async () => {
-      if (selectedLotCodes.length === 0) {
-        throw new Error("Pilih minimal 1 lot/bahan yang bermasalah untuk ditahan keamanannya.");
-      }
-      if (title.trim().length < 3 || notes.trim().length < 5) {
-        throw new Error("Isi judul (min. 3 karakter) dan kronologi temuan (min. 5 karakter).");
-      }
-      const created = await apiClient.createIncident({
-        title: title.trim(),
-        category,
-        severity,
-        notes: notes.trim(),
-        dataset_version_id: effectiveDatasetId || undefined,
-        affected_lots: selectedLotCodes.map((lot_code) => ({
-          lot_code,
-          reason_detail: notes.trim(),
-        })),
-        auto_hold_matching_lots: false,
-      });
-      if (evidenceFile) {
-        await apiClient.uploadIncidentImage(created.id, evidenceFile);
-      }
-      return created;
-    },
-    onSuccess: (created) => {
-      setTitle("");
-      setNotes("");
-      setSelectedLotCodes([]);
-      setEvidenceFile(null);
-      setShowForm(false);
-      setFeedback({
-        tone: "ok",
-        text: `Insiden "${created.title}" dicatat: ${created.affected_lots.length} lot (${created.total_held_kg.toFixed(
-          2
-        )} kg) langsung berstatus SAFETY HOLD dan rencana terdampak ditahan (ON HOLD).`,
-      });
-      invalidateAll();
-    },
-    onError: (err) => {
-      setFeedback({
-        tone: "err",
-        text: err instanceof ApiError || err instanceof Error ? err.message : "Gagal melaporkan insiden.",
-      });
-    },
-  });
-
-  const recoverMutation = useMutation({
-    mutationFn: (inc: IngredientIncidentResponse) =>
-      apiClient.startIncidentRecovery(inc.id, {
-        title: `Pemulihan Insiden: ${inc.title}`,
-      }),
-    onSuccess: (ev) => {
-      invalidateAll();
-      const targetUrl = `/simulator?eventId=${ev.id}${
-        ev.baseline_run_id ? `&baselineRun=${ev.baseline_run_id}` : ""
-      }${ev.baseline_menu_review_id ? `&reviewId=${ev.baseline_menu_review_id}` : ""}`;
-      if (onNavigate) {
-        onNavigate(targetUrl);
-      } else if (typeof window !== "undefined") {
-        window.location.assign(targetUrl);
-      }
-    },
-    onError: (err) => {
-      setFeedback({
-        tone: "err",
-        text: err instanceof ApiError ? err.message : "Gagal menjalankan pemulihan menu dari insiden.",
-      });
-    },
-  });
-
-  const disposeMutation = useMutation({
-    mutationFn: (incidentId: string) =>
-      apiClient.updateIncidentStatus(incidentId, {
-        status: "REJECTED",
-        notes: "Lot ditolak/dimusnahkan oleh Kepala Dapur sesuai SOP internal.",
-        dispose_held_lots: true,
-        disposal_notes: "Lot dikeluarkan permanen dari stok layak pakai.",
-      }),
-    onSuccess: (updated) => {
-      setConfirmDisposeId(null);
-      setFeedback({
-        tone: "ok",
-        text: `Lot pada insiden "${updated.title}" berstatus REJECTED_DISPOSED dan tidak akan pernah terpakai di optimasi.`,
-      });
-      invalidateAll();
-    },
-    onError: (err) => {
-      setFeedback({
-        tone: "err",
-        text: err instanceof ApiError ? err.message : "Gagal menolak/memusnahkan lot.",
-      });
-    },
-  });
-
-  const incidents = incidentsQuery.data ?? [];
+  const pendingDisposalForQC = activeIncidents.filter(
+    (inc) => inc.disposal_authorized && !inc.disposal_executed_at
+  );
 
   return (
     <section
-      aria-label="Penanganan Bahan Bermasalah & Safety Hold"
-      className="space-y-4 rounded-2xl border border-[#F5C2C2] bg-white p-4 sm:p-5 shadow-[0_1px_2px_rgba(22,53,74,0.04)]"
+      className="rounded-xl border border-rose-200 bg-white p-5 shadow-sm"
+      data-testid="incident-panel"
     >
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#EEF3EE] pb-3">
-        <div className="min-w-0 space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <ShieldAlert className="h-5 w-5 text-[#991B1B]" aria-hidden="true" />
-            <h2 className="text-base font-bold text-[#16354A]">
-              Laporan Bahan Bermasalah & Penahanan Keamanan (Safety Hold)
-            </h2>
-            {incidents.filter((i) => i.status === "ON_HOLD" || i.status === "UNDER_REVIEW").length > 0 && (
-              <StatusBadge
-                tone="critical"
-                label={`${
-                  incidents.filter((i) => i.status === "ON_HOLD" || i.status === "UNDER_REVIEW").length
-                } insiden aktif`}
-              />
-            )}
-          </div>
-          <p className="text-xs leading-relaxed text-[#4A6170]">
-            Lindungi penerima terlebih dahulu: lot bermasalah langsung dikecualikan dari stok siap pakai dan
-            rencana terdampak otomatis berstatus <strong>ON HOLD</strong>.{" "}
-            <span className="font-semibold text-[#991B1B]">
-              Bukan uji laboratorium/BPOM, bukan validasi gizi klinis, dan bukan sertifikasi BGN.
-            </span>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-semibold text-rose-800">
+            <ShieldAlert className="h-3.5 w-3.5" />
+            Penahanan Bahan Bermasalah
+          </span>
+          <h2 className="mt-1.5 text-lg font-bold text-slate-900">
+            {isCustodian
+              ? "Laporkan & Tahan Lot Bermasalah (2 Langkah Wajib)"
+              : "Status Tahan Keamanan Bahan"}
+          </h2>
+          <p className="text-xs text-slate-600">
+            {isCustodian
+              ? "Pilih lot dan kondisinya — stok langsung dikecualikan agar tidak dipakai produksi maupun perencanaan menu."
+              : user?.stock_custodian?.is_assigned
+                ? `Penahanan stok hanya dapat dilaporkan oleh Petugas QC Pengelola Stok aktif: ${user.stock_custodian.custodian_full_name}.`
+                : "Dapur belum memiliki Petugas QC Pengelola Stok aktif. Kepala Dapur perlu menunjuk petugas terlebih dahulu."}
           </p>
         </div>
-
-        <button
-          type="button"
-          onClick={() => setShowForm((v) => !v)}
-          className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-[#991B1B] px-4 py-2 text-xs font-bold text-white hover:bg-[#7F1D1D]"
-        >
-          <AlertTriangle className="h-4 w-4" aria-hidden="true" />
-          <span>{showForm ? "Tutup Form Laporan" : "Laporkan Bahan Bermasalah"}</span>
-        </button>
       </div>
 
       {feedback && (
         <div
-          role={feedback.tone === "err" ? "alert" : "status"}
-          className={`flex items-start gap-2 rounded-xl border p-3 text-xs font-medium ${
+          className={`mt-3 rounded-lg border px-3.5 py-2.5 text-xs font-medium ${
             feedback.tone === "ok"
-              ? "border-[#B5DFDA] bg-[#EBF6F5] text-[#0F766E]"
-              : "border-[#F5C2C2] bg-[#FEF0F0] text-[#991B1B]"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+              : feedback.tone === "warn"
+                ? "border-amber-300 bg-amber-50 text-amber-950"
+                : "border-rose-300 bg-rose-50 text-rose-900"
           }`}
+          role="status"
         >
-          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-          <span>{feedback.text}</span>
+          <p>{feedback.text}</p>
+          {pendingRetryUpload && (
+            <button
+              type="button"
+              onClick={() => retryUploadMutation.mutate()}
+              disabled={retryUploadMutation.isPending}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-amber-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-800"
+            >
+              {retryUploadMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Camera className="h-3.5 w-3.5" />
+              )}
+              Unggah Ulang Foto
+            </button>
+          )}
         </div>
       )}
 
-      {showForm && (
-        <div className="space-y-4 rounded-xl border border-[#F5C2C2] bg-[#FFF8F8] p-4">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            {datasets.length > 0 && (
-              <div>
-                <label htmlFor="inc-dataset" className="block text-xs font-semibold text-[#16354A]">
-                  Dataset / Dapur Acuan
-                </label>
-                <select
-                  id="inc-dataset"
-                  value={effectiveDatasetId}
-                  onChange={(e) => {
-                    setSelectedDatasetId(e.target.value);
-                    setSelectedLotCodes([]);
-                  }}
-                  className="mt-1 h-11 w-full rounded-xl border border-[#DCE6DE] bg-white px-3 text-xs text-[#16354A]"
-                >
-                  {datasets.map((ds) => (
-                    <option key={ds.id} value={ds.id}>
-                      {ds.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <div>
-              <label htmlFor="inc-category" className="block text-xs font-semibold text-[#16354A]">
-                Kategori Temuan
-              </label>
-              <select
-                id="inc-category"
-                value={category}
-                onChange={(e) => setCategory(e.target.value as IncidentCategoryEnum)}
-                className="mt-1 h-11 w-full rounded-xl border border-[#DCE6DE] bg-white px-3 text-xs text-[#16354A]"
-              >
-                <option value="SPOILAGE">Basi / Pembusukan</option>
-                <option value="SUSPECTED_CONTAMINATION">Dugaan Kontaminasi</option>
-                <option value="ABNORMAL_ODOR_APPEARANCE">Bau / Warna Tidak Wajar</option>
-                <option value="TEMPERATURE_EXCURSION">Suhu Penyimpanan Menyimpang</option>
-                <option value="DAMAGED_PACKAGING">Kemasan Rusak / Bocor</option>
-                <option value="SUPPLIER_RECALL">Penarikan Pemasok (Recall)</option>
-                <option value="UNKNOWN_CONDITION">Kondisi Meragukan</option>
-              </select>
-            </div>
-
-            <div>
-              <label htmlFor="inc-severity" className="block text-xs font-semibold text-[#16354A]">
-                Tingkat Risiko Operasional
-              </label>
-              <select
-                id="inc-severity"
-                value={severity}
-                onChange={(e) => setSeverity(e.target.value as IncidentSeverityEnum)}
-                className="mt-1 h-11 w-full rounded-xl border border-[#DCE6DE] bg-white px-3 text-xs text-[#16354A]"
-              >
-                <option value="CRITICAL">KRITIS — Segera Tahan & Ganti Menu</option>
-                <option value="HIGH">TINGGI — Tahan Lot Terdampak</option>
-                <option value="MEDIUM">SEDANG — Evaluasi Batch</option>
-                <option value="LOW">RENDAH — Catatan Kualitas</option>
-              </select>
-            </div>
+      {lastCreatedIncident && (
+        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-semibold text-slate-900">{lastCreatedIncident.title}</span>
+            <StatusBadge label={formatIncidentStatus(lastCreatedIncident.status).label} tone="critical" />
           </div>
+          <p className="mt-1">
+            Status paparan: <strong>{formatExposureStatusLabel(lastCreatedIncident.exposure_status).label}</strong>{" "}
+            — Lot ditahan tidak dapat dipakai ulang lewat penyesuaian stok biasa.
+          </p>
+          {user?.active_role === "MENU_PLANNER" && (
+            <Link
+              href="/simulator"
+              className="mt-2 inline-flex items-center gap-1 font-semibold text-indigo-700 hover:underline"
+            >
+              Buka Pemulihan Menu <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          )}
+        </div>
+      )}
 
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+      {/* Active Stock Custodian fast 2-field form */}
+      {isCustodian && (
+        <div className="mt-4 space-y-4 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
+          {lotsQuery.isError ? (
+            <ErrorState message="Daftar lot belum dapat dimuat." onRetry={() => lotsQuery.refetch()} />
+          ) : (
             <div>
-              <label htmlFor="inc-title" className="block text-xs font-semibold text-[#16354A]">
-                Judul Laporan Insiden
+              <label className="block text-xs font-semibold text-slate-800">
+                1. Pilih Lot Bahan Bermasalah *
               </label>
-              <input
-                id="inc-title"
-                type="text"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="Contoh: Ayam Lot A Bau Asam + Telur Retak + Bayam Layu"
-                className="mt-1 h-11 w-full rounded-xl border border-[#DCE6DE] bg-white px-3 text-sm text-[#16354A]"
-              />
+              <div className="mt-2 grid max-h-56 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
+                {flatLots
+                  .filter((l) => l.safety_hold_status === "NONE")
+                  .map((lot) => {
+                    const checked = selectedLotCodes.includes(lot.lot_code);
+                    return (
+                      <label
+                        key={lot.lot_code}
+                        className={`flex cursor-pointer items-center justify-between rounded-lg border px-3 py-2 text-xs transition ${
+                          checked
+                            ? "border-rose-500 bg-rose-50 text-rose-950"
+                            : "border-slate-200 bg-white text-slate-800 hover:border-slate-300"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleLot(lot.lot_code)}
+                            className="h-4 w-4 accent-rose-600"
+                          />
+                          <div>
+                            <div className="font-semibold">{lot.ingredient_name}</div>
+                            <div className="text-[11px] text-slate-500">Lot {lot.lot_code}</div>
+                          </div>
+                        </div>
+                        <span className="font-mono font-semibold text-slate-700">
+                          {lot.recorded_kg.toFixed(1)} kg
+                        </span>
+                      </label>
+                    );
+                  })}
+              </div>
+              {flatLots.filter((l) => l.safety_hold_status === "NONE").length === 0 && (
+                <p className="mt-1 text-xs text-slate-500">
+                  Tidak ada lot bersih yang tersedia untuk ditahan pada dataset ini.
+                </p>
+              )}
             </div>
+          )}
 
-            <div>
-              <label htmlFor="inc-photo" className="block text-xs font-semibold text-[#16354A]">
-                Foto Bukti Lapangan (Opsional, EXIF otomatis dihapus)
-              </label>
-              <label
-                htmlFor="inc-photo"
-                className="mt-1 flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl border border-dashed border-[#DCE6DE] bg-white px-3 text-xs text-[#4A6170] hover:bg-[#F5F8F5]"
-              >
-                <Camera className="h-4 w-4 text-[#0F766E]" aria-hidden="true" />
-                <span className="truncate">
-                  {evidenceFile ? evidenceFile.name : "Pilih foto bukti (JPEG/PNG/WEBP)..."}
-                </span>
-                <input
-                  id="inc-photo"
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  onChange={(e) => setEvidenceFile(e.target.files?.[0] ?? null)}
-                  className="sr-only"
-                />
-              </label>
-            </div>
+          <div>
+            <label htmlFor="incident-category-select" className="block text-xs font-semibold text-slate-800">
+              2. Kondisi / Penyebab *
+            </label>
+            <select
+              id="incident-category-select"
+              value={category}
+              onChange={(e) => setCategory(e.target.value as IncidentCategoryEnum)}
+              className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+            >
+              {INCIDENT_CATEGORIES.map((cat) => (
+                <option key={cat} value={cat}>
+                  {formatIncidentCategoryLabel(cat)}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div>
-            <label htmlFor="inc-notes" className="block text-xs font-semibold text-[#16354A]">
-              Keterangan Kondisi & Lokasi Penyimpanan
-            </label>
-            <textarea
-              id="inc-notes"
-              rows={2}
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Jelaskan kondisi bahan yang mencurigakan, rak/cold storage, atau indikasi kerusakan..."
-              className="mt-1 w-full rounded-xl border border-[#DCE6DE] bg-white p-3 text-xs text-[#16354A]"
-            />
-          </div>
+            <button
+              type="button"
+              onClick={() => setShowOptionalDetails((v) => !v)}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700 hover:text-slate-950"
+            >
+              {showOptionalDetails ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
+              Detail Tambahan (Opsional)
+            </button>
 
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs font-bold text-[#16354A]">
-                Pilih Satu atau Beberapa Lot Bahan Terdampak ({selectedLotCodes.length} dipilih):
-              </span>
-              {lotsQuery.isLoading && <span className="text-xs text-[#647A87]">Memuat daftar lot...</span>}
-            </div>
-
-            {candidateLots.length === 0 ? (
-              <p className="rounded-xl border border-[#DCE6DE] bg-white p-3 text-xs text-[#647A87]">
-                Belum ada batch lot terpisah pada dataset ini. Pilih dataset simulasi kualitas/insiden (3C) di atas untuk melihat daftar lot per bahan.
-              </p>
-            ) : (
-              <div className="grid max-h-56 grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
-                {candidateLots.map((lot) => {
-                  const checked = selectedLotCodes.includes(lot.lotCode);
-                  const alreadyHeld = lot.safetyHoldStatus !== "NONE";
-                  return (
-                    <label
-                      key={lot.lotId}
-                      className={`flex cursor-pointer items-start gap-2.5 rounded-xl border p-2.5 text-xs transition ${
-                        alreadyHeld
-                          ? "border-[#F5C2C2] bg-[#FEF0F0]/70 opacity-75"
-                          : checked
-                            ? "border-[#991B1B] bg-[#FEF0F0] ring-1 ring-[#991B1B]"
-                            : "border-[#DCE6DE] bg-white hover:bg-[#F5F8F5]"
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        disabled={alreadyHeld}
-                        checked={checked}
-                        onChange={() => toggleLotCode(lot.lotCode)}
-                        className="mt-0.5 h-4 w-4 accent-[#991B1B]"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="font-bold text-[#16354A] break-words">
-                          {lot.ingredientName} ({lot.ingredientCode})
-                        </p>
-                        <p className="text-[11px] font-semibold text-[#4A6170]">{lot.lotCode}</p>
-                        <p className="text-[11px] text-[#647A87]">
-                          Siap pakai: {formatWeightFromGrams(lot.usableG)} / Tercatat:{" "}
-                          {formatWeightFromGrams(lot.recordedG)}
-                        </p>
-                        {alreadyHeld && (
-                          <span className="mt-1 inline-block rounded bg-[#991B1B] px-1.5 py-0.5 text-[10px] font-bold text-white">
-                            {lot.safetyHoldStatus}
-                          </span>
-                        )}
-                      </div>
-                    </label>
-                  );
-                })}
+            {showOptionalDetails && (
+              <div className="mt-3 grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-2">
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600">
+                    Judul Singkat (otomatis jika kosong)
+                  </label>
+                  <input
+                    type="text"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="Contoh: Suspek bau asam rak chiller 1"
+                    className="mt-1 w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600">
+                    Tingkat Keparahan
+                  </label>
+                  <select
+                    value={severity}
+                    onChange={(e) => setSeverity(e.target.value as IncidentSeverityEnum)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-xs"
+                  >
+                    <option value="CRITICAL">Kritis</option>
+                    <option value="HIGH">Tinggi</option>
+                    <option value="MEDIUM">Sedang</option>
+                    <option value="LOW">Rendah</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-600">
+                    Nama Pemasok (opsional)
+                  </label>
+                  <input
+                    type="text"
+                    value={supplierName}
+                    onChange={(e) => setSupplierName(e.target.value)}
+                    placeholder="Contoh: CV Sumber Pangan"
+                    className="mt-1 w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-xs"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="incident-evidence-file" className="block text-[11px] font-medium text-slate-600">
+                    Foto Bukti Kondisi Bahan (opsional)
+                  </label>
+                  <input
+                    id="incident-evidence-file"
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={(e) => setEvidenceFile(e.target.files?.[0] ?? null)}
+                    className="mt-1 block w-full text-xs text-slate-600"
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-[11px] font-medium text-slate-600">
+                    Catatan Tambahan (otomatis jika kosong)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="Jelaskan lokasi penyimpanan atau ciri fisik..."
+                    className="mt-1 w-full rounded-md border border-slate-300 px-2.5 py-1.5 text-xs"
+                  />
+                </div>
               </div>
             )}
           </div>
 
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+            <span className="text-[11px] text-slate-500">
+              {selectedLotCodes.length > 0
+                ? `${selectedLotCodes.length} lot dipilih untuk langsung ditahan.`
+                : "Pilih minimal 1 lot terlebih dahulu."}
+            </span>
             <button
               type="button"
-              disabled={createMutation.isPending || selectedLotCodes.length === 0}
-              onClick={() => createMutation.mutate()}
-              className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-[#991B1B] px-5 py-2 text-sm font-bold text-white hover:bg-[#7F1D1D] disabled:opacity-50"
+              onClick={() => reportMutation.mutate()}
+              disabled={reportMutation.isPending || selectedLotCodes.length === 0}
+              className="inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
             >
-              {createMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              {reportMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <ShieldAlert className="h-4 w-4" aria-hidden="true" />
+                <Lock className="h-4 w-4" />
               )}
-              <span>Tahan Lot & Laporkan Insiden</span>
+              Tahan Bahan & Kirim Laporan
             </button>
           </div>
         </div>
       )}
 
-      {incidentsQuery.isError ? (
-        <ErrorState
-          title="Gagal memuat daftar insiden"
-          message={(incidentsQuery.error as Error).message}
-          onRetry={() => incidentsQuery.refetch()}
-        />
-      ) : incidents.length === 0 ? (
-        <p className="rounded-xl border border-[#DCE6DE] bg-[#F5F8F5] p-4 text-center text-xs text-[#647A87]">
-          Belum ada insiden bahan bermasalah yang dilaporkan pada dapur ini.
-        </p>
-      ) : (
-        <div className="space-y-3">
-          {incidents.map((inc) => {
-            const st = formatIncidentStatus(inc.status);
-            const exp = formatExposureStatusLabel(inc.exposure_status);
-            return (
-              <article
-                key={inc.id}
-                className="space-y-3 rounded-xl border border-[#DCE6DE] bg-[#F8FAF8] p-4"
+      {/* Pending Physical Disposal Queue for Active QC Custodian */}
+      {isCustodian && pendingDisposalForQC.length > 0 && (
+        <div className="mt-4 space-y-2 rounded-xl border border-amber-300 bg-amber-50/70 p-4">
+          <h3 className="text-sm font-bold text-amber-950">
+            Menunggu Eksekusi Pemusnahan Fisik ({pendingDisposalForQC.length})
+          </h3>
+          <p className="text-xs text-amber-900">
+            Kepala Dapur sudah menyetujui pemusnahan lot berikut. Catat pemusnahan fisik agar status buku besar stok selesai diperbarui.
+          </p>
+          {pendingDisposalForQC.map((inc) => (
+            <div
+              key={inc.id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-white p-3 text-xs"
+            >
+              <div>
+                <div className="font-semibold text-slate-900">{inc.title}</div>
+                <div className="text-slate-600">
+                  Disetujui {inc.disposal_authorized_by_name ?? "Kepala Dapur"} ·{" "}
+                  {inc.affected_lots.map((l) => l.lot_code).join(", ")}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => disposalExecMutation.mutate(inc.id)}
+                disabled={disposalExecMutation.isPending}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-700 px-3 py-1.5 font-semibold text-white hover:bg-amber-800"
               >
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="min-w-0 space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-sm font-bold text-[#16354A] break-words">{inc.title}</h3>
-                      <StatusBadge tone={st.tone} label={st.label} />
-                      <StatusBadge tone="neutral" label={formatIncidentCategoryLabel(inc.category)} />
-                    </div>
-                    <p className="text-[11px] text-[#647A87]">
-                      Dilaporkan oleh {inc.reported_by_name} ({inc.reporter_role}) •{" "}
-                      {formatDateTimeID(inc.created_at)}
-                    </p>
-                  </div>
+                <Trash2 className="h-3.5 w-3.5" />
+                Catat Pemusnahan Fisik
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    {role === "MENU_PLANNER" && inc.status !== "CLOSED" && (
-                      inc.recovery_event_id ? (
-                        <Link
-                          href={`/simulator?eventId=${inc.recovery_event_id}`}
-                          className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl bg-[#0F766E] px-3.5 py-2 text-xs font-bold text-white hover:bg-[#0B5F58]"
-                        >
-                          <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-                          <span>Buka Hasil Pemulihan</span>
-                          <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
-                        </Link>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={recoverMutation.isPending}
-                          onClick={() => recoverMutation.mutate(inc)}
-                          className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl bg-[#0F766E] px-3.5 py-2 text-xs font-bold text-white hover:bg-[#0B5F58] disabled:opacity-60"
-                        >
-                          {recoverMutation.isPending ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                          ) : (
-                            <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-                          )}
-                          <span>Cari Alternatif Menu</span>
-                        </button>
-                      )
-                    )}
-
-                    {role === "KITCHEN_MANAGER" &&
-                      (inc.status === "ON_HOLD" || inc.status === "UNDER_REVIEW") && (
-                        confirmDisposeId === inc.id ? (
-                          <div className="flex flex-wrap items-center gap-1.5">
-                            <button
-                              type="button"
-                              disabled={disposeMutation.isPending}
-                              onClick={() => disposeMutation.mutate(inc.id)}
-                              className="inline-flex min-h-[40px] items-center gap-1 rounded-xl bg-[#991B1B] px-3 py-1.5 text-xs font-bold text-white hover:bg-[#7F1D1D]"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                              <span>Konfirmasi Musnahkan Lot</span>
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDisposeId(null)}
-                              className="min-h-[40px] rounded-xl border border-[#DCE6DE] bg-white px-2.5 text-xs font-semibold text-[#4A6170]"
-                            >
-                              Batal
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDisposeId(inc.id)}
-                            className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-[#F5C2C2] bg-white px-3 py-1.5 text-xs font-bold text-[#991B1B] hover:bg-[#FEF0F0]"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                            <span>Tolak / Musnahkan Lot</span>
-                          </button>
-                        )
-                      )}
-                  </div>
+      {/* Read-only active holds list */}
+      {!compact && activeIncidents.length > 0 && (
+        <div className="mt-5 space-y-2">
+          <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">
+            Bahan Sedang Ditahan ({activeIncidents.length})
+          </h3>
+          {activeIncidents.map((inc) => {
+            const st = formatIncidentStatus(inc.status);
+            return (
+              <div
+                key={inc.id}
+                className="rounded-lg border border-slate-200 bg-white p-3 text-xs"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="font-semibold text-slate-900">{inc.title}</div>
+                  <StatusBadge label={st.label} tone={st.tone} />
                 </div>
-
-                {inc.notes && <p className="text-xs text-[#334E5E]">{inc.notes}</p>}
-
-                {/* Lot Hold vs Clean Stock Summary */}
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  <div className="rounded-lg border border-[#F5C2C2] bg-[#FEF0F0] p-2.5 text-xs">
-                    <span className="block text-[11px] font-semibold text-[#991B1B]">
-                      Total Stok Ditahan (SAFETY HOLD)
-                    </span>
-                    <strong className="text-sm font-bold text-[#991B1B] tabular-nums">
-                      {inc.total_held_kg.toFixed(2)} kg ({inc.affected_lots.length} lot)
-                    </strong>
-                  </div>
-                  <div className="rounded-lg border border-[#B5DFDA] bg-[#EBF6F5] p-2.5 text-xs">
-                    <span className="block text-[11px] font-semibold text-[#0F766E]">
-                      Sisa Lot Bersih Terverifikasi (Aman)
-                    </span>
-                    <strong className="text-sm font-bold text-[#0F766E] tabular-nums">
-                      {inc.total_clean_remaining_kg.toFixed(2)} kg
-                    </strong>
-                  </div>
-                  <div className="rounded-lg border border-[#DCE6DE] bg-white p-2.5 text-xs">
-                    <span className="block text-[11px] font-semibold text-[#4A6170]">
-                      Slot Rencana Aktif Terdampak
-                    </span>
-                    <strong className="text-sm font-bold text-[#16354A] tabular-nums">
-                      {inc.affected_plans.length} slot hidangan
-                    </strong>
-                  </div>
-                </div>
-
-                {/* Per-lot details */}
-                <div className="flex flex-wrap gap-1.5">
-                  {inc.affected_lots.map((al) => (
-                    <span
-                      key={al.id}
-                      className="inline-flex items-center gap-1 rounded-lg border border-[#F5C2C2] bg-white px-2.5 py-1 text-[11px] font-medium text-[#16354A]"
-                    >
-                      <strong className="text-[#991B1B]">{al.lot_code}</strong> • {al.ingredient_name}:{" "}
-                      {(al.usable_before_hold_raw_g / 1000).toFixed(2)} kg [{al.lot_safety_status}]
-                      {al.clean_remaining_raw_g > 0 && (
-                        <span className="text-[#0F766E]">
-                          (sisa bersih {(al.clean_remaining_raw_g / 1000).toFixed(2)} kg)
-                        </span>
-                      )}
-                    </span>
-                  ))}
-                </div>
-
-                {/* Exposure banner */}
-                <div
-                  className={`rounded-lg border p-2.5 text-xs ${
-                    exp.tone === "critical"
-                      ? "border-[#F5C2C2] bg-[#FEF0F0] text-[#991B1B]"
-                      : "border-[#F3D19B] bg-[#FFFBEB] text-[#92400E]"
-                  }`}
-                >
-                  <p className="font-bold">{exp.label}</p>
-                  <ul className="mt-1 space-y-0.5 text-[11px]">
-                    {inc.production_exposures.map((pe, idx) => (
-                      <li key={idx}>• {pe.summary}</li>
-                    ))}
-                  </ul>
-                </div>
-
-                {/* Non-bypassable release rule banner */}
-                <div className="flex items-start gap-2 rounded-lg border border-[#DCE6DE] bg-white px-3 py-2 text-[11px] text-[#4A6170]">
-                  <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#991B1B]" aria-hidden="true" />
-                  <span>
-                    Lot berstatus <strong>SAFETY HOLD</strong> terkunci dan tidak dapat dilepaskan
-                    sepihak di dalam aplikasi; pelepasan hanya dilakukan setelah keputusan resmi
-                    otoritas/laboratorium berwenang di luar sistem ini.
-                  </span>
-                </div>
-              </article>
+                <p className="mt-1 text-slate-600">
+                  {inc.affected_ingredient_names.join(", ")} · {inc.total_held_kg.toFixed(2)} kg ·{" "}
+                  {formatJakartaDateTime(inc.observed_at)}
+                </p>
+                {onNavigate && user?.active_role === "MENU_PLANNER" && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigate("/simulator")}
+                    className="mt-2 inline-flex items-center gap-1 font-semibold text-indigo-700 hover:underline"
+                  >
+                    Cari Pengganti Menu <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
             );
           })}
+        </div>
+      )}
+
+      {!isCustodian && activeIncidents.length === 0 && (
+        <div className="mt-3 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-xs text-emerald-900">
+          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+          Tidak ada bahan yang sedang ditahan keamanan saat ini.
         </div>
       )}
     </section>

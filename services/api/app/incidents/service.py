@@ -36,6 +36,7 @@ from app.incidents.schemas import (
     IncidentCreateRequest,
     IncidentImageInfo,
     IncidentImpactSummaryResponse,
+    IncidentRecordDisposalRequest,
     IncidentReleaseHoldRequest,
     IncidentSeverityEnum,
     IncidentStartRecoveryRequest,
@@ -319,6 +320,17 @@ def _load_incident_orm(
     return session.execute(stmt).scalar_one_or_none()
 
 
+_CATEGORY_LABELS_ID = {
+    "SPOILAGE": "Basi / Rusak",
+    "SUSPECTED_CONTAMINATION": "Diduga Kontaminasi",
+    "DAMAGED_PACKAGING": "Kemasan Rusak",
+    "ABNORMAL_ODOR_APPEARANCE": "Bau / Tampilan Tidak Wajar",
+    "SUPPLIER_RECALL": "Penarikan Pemasok",
+    "TEMPERATURE_EXCURSION": "Suhu Penyimpanan Menyimpang",
+    "UNKNOWN_CONDITION": "Kondisi Meragukan",
+}
+
+
 def _to_incident_response(session: Session, row: IngredientIncidentORM) -> IngredientIncidentResponse:
     affected_lot_ids = {l.lot_id for l in row.affected_lots}
     affected_ing_ids = {l.ingredient_id for l in row.affected_lots}
@@ -480,6 +492,15 @@ def _to_incident_response(session: Session, row: IngredientIncidentORM) -> Ingre
         exposure_status=exposure_status,
         production_exposures=exposures,
         recovery_event_id=UUID(row.recovery_event_id) if row.recovery_event_id else None,
+        disposal_authorized=bool(getattr(row, "disposal_authorized", False)),
+        disposal_authorized_by_name=_user_name(
+            session, getattr(row, "disposal_authorized_by_user_id", None)
+        ),
+        disposal_authorized_at=getattr(row, "disposal_authorized_at", None),
+        disposal_executed_by_name=_user_name(
+            session, getattr(row, "disposal_executed_by_user_id", None)
+        ),
+        disposal_executed_at=getattr(row, "disposal_executed_at", None),
         images=images,
         actions=actions,
     )
@@ -629,18 +650,40 @@ def report_ingredient_incident(
         ing_by_id=ing_by_id,
     )
 
+    affected_names_for_title = sorted(
+        {
+            ing_by_id[lot.ingredient_id].name
+            for lot, _ in target_lots.values()
+            if lot.ingredient_id in ing_by_id
+        }
+    )
+    cat_label = _CATEGORY_LABELS_ID.get(req.category.value, req.category.value)
+    summary_names = ", ".join(affected_names_for_title[:3])
+    if len(affected_names_for_title) > 3:
+        summary_names = f"{summary_names} (+{len(affected_names_for_title) - 3} bahan)"
+    resolved_title = (
+        req.title.strip()
+        if req.title and req.title.strip()
+        else f"Tahan Keamanan: {summary_names or ', '.join(sorted(affected_ing_codes))} ({cat_label})"
+    )[:255]
+    resolved_notes = (
+        req.notes.strip()
+        if req.notes and req.notes.strip()
+        else f"Penahanan cepat ({cat_label}) pada {len(target_lots)} lot bahan."
+    )
+
     incident_row = IngredientIncidentORM(
         id=incident_id,
         kitchen_id=str(auth.kitchen_id),
         dataset_version_id=str(ds_id),
-        title=req.title.strip(),
+        title=resolved_title,
         category=req.category.value,
         severity=req.severity.value,
         status=IncidentStatusEnum.ON_HOLD.value,
         observed_at=observed_dt,
         reported_by_user_id=str(auth.user_id),
         reporter_role=auth.role.value,
-        notes=req.notes.strip(),
+        notes=resolved_notes,
         supplier_name=req.supplier_name.strip() if req.supplier_name else None,
         delivery_ref=req.delivery_ref.strip() if req.delivery_ref else None,
         related_batch_code=req.related_batch_code.strip() if req.related_batch_code else None,
@@ -711,7 +754,7 @@ def report_ingredient_incident(
             action_type="REPORTED_AND_HELD",
             actor_user_id=str(auth.user_id),
             actor_role=auth.role.value,
-            notes=req.notes.strip(),
+            notes=resolved_notes,
             metadata_json={
                 "held_lot_codes": sorted(held_codes_for_audit),
                 "affected_ingredient_codes": sorted(affected_ing_codes),
@@ -732,7 +775,7 @@ def report_ingredient_incident(
         actor_user_id=auth.user_id,
         actor_role=auth.role.value,
         metadata={
-            "title": req.title.strip(),
+            "title": resolved_title,
             "held_lot_codes": sorted(held_codes_for_audit),
             "affected_ingredient_codes": sorted(affected_ing_codes),
             "held_plans_count": len(held_plans),
@@ -806,61 +849,180 @@ def update_incident_status(
     incident_id: UUID,
     req: IncidentStatusUpdateRequest,
 ) -> IngredientIncidentResponse:
+    """Kitchen Manager review/authorization transition. Never directly mutates lot ledger status."""
     row = _load_incident_orm(session, incident_id)
     if row is None or row.kitchen_id != str(auth.kitchen_id):
         raise HTTPException(status_code=404, detail="Insiden tidak ditemukan pada dapur ini.")
 
-    if req.status in {
-        IncidentStatusEnum.REJECTED,
-        IncidentStatusEnum.RESOLVED,
-        IncidentStatusEnum.CLOSED,
-    } and auth.role != RoleEnum.KITCHEN_MANAGER:
+    if auth.role != RoleEnum.KITCHEN_MANAGER:
         raise HTTPException(
             status_code=403,
-            detail="Hanya Kepala Dapur (KITCHEN_MANAGER) yang dapat memusnahkan lot atau menutup insiden.",
+            detail="Hanya Kepala Dapur (KITCHEN_MANAGER) yang dapat meninjau status atau mengotorisasi pemusnahan lot.",
         )
 
     now = _utcnow()
     row.status = req.status.value
     row.updated_at = now
 
-    disposed_lots: List[str] = []
-    if req.dispose_held_lots or req.status == IncidentStatusEnum.REJECTED:
-        for al in row.affected_lots:
-            lot = session.get(InventoryLotORM, al.lot_id)
-            if lot is not None:
-                lot.safety_hold_status = "REJECTED_DISPOSED"
-                disposed_lots.append(lot.lot_code)
-            al.lot_safety_status = "REJECTED_DISPOSED"
-            al.updated_at = now
-            if req.disposal_notes:
-                al.reason_detail = req.disposal_notes.strip()
+    authorize_disposal = bool(req.dispose_held_lots or req.status == IncidentStatusEnum.REJECTED)
+    if authorize_disposal:
+        row.disposal_authorized = True
+        row.disposal_authorized_by_user_id = str(auth.user_id)
+        row.disposal_authorized_at = now
+        if req.disposal_notes and req.disposal_notes.strip():
+            disp_note = req.disposal_notes.strip()
+            for al in row.affected_lots:
+                al.reason_detail = disp_note
+                al.updated_at = now
+
+    default_note = (
+        "Otorisasi pemusnahan lot disetujui oleh Kepala Dapur; menunggu eksekusi pemusnahan fisik oleh Petugas QC Pengelola Stok."
+        if authorize_disposal
+        else f"Status insiden diperbarui ke {req.status.value}."
+    )
+    resolved_note = req.notes.strip() if req.notes and req.notes.strip() else default_note
 
     session.add(
         IncidentActionORM(
             id=str(uuid4()),
             incident_id=row.id,
             kitchen_id=row.kitchen_id,
-            action_type=f"STATUS_{req.status.value}",
+            action_type="DISPOSAL_AUTHORIZED" if authorize_disposal else f"STATUS_{req.status.value}",
             actor_user_id=str(auth.user_id),
             actor_role=auth.role.value,
-            notes=req.notes.strip(),
+            notes=resolved_note,
             metadata_json={
                 "new_status": req.status.value,
-                "disposed_lots": disposed_lots,
+                "disposal_authorized": bool(row.disposal_authorized),
+                "pending_qc_execution": bool(authorize_disposal and row.disposal_executed_at is None),
             },
             created_at=now,
         )
     )
     record_audit_event(
         session,
-        action="incident.status_updated",
+        action="incident.disposal_authorized" if authorize_disposal else "incident.status_updated",
         entity_type="ingredient_incident",
         entity_id=row.id,
         kitchen_id=auth.kitchen_id,
         actor_user_id=auth.user_id,
         actor_role=auth.role.value,
-        metadata={"new_status": req.status.value, "disposed_lots": disposed_lots},
+        metadata={
+            "new_status": req.status.value,
+            "disposal_authorized": bool(row.disposal_authorized),
+        },
+    )
+    session.commit()
+    reloaded = _load_incident_orm(session, incident_id, fresh=True)
+    assert reloaded is not None
+    return _to_incident_response(session, reloaded)
+
+
+def record_incident_disposal(
+    session: Session,
+    auth: AuthContext,
+    incident_id: UUID,
+    req: IncidentRecordDisposalRequest,
+) -> IngredientIncidentResponse:
+    """Execute physical disposal in inventory ledger ONLY after Kitchen Manager authorization."""
+    row = _load_incident_orm(session, incident_id)
+    if row is None or row.kitchen_id != str(auth.kitchen_id):
+        raise HTTPException(status_code=404, detail="Insiden tidak ditemukan pada dapur ini.")
+
+    if not row.disposal_authorized:
+        raise HTTPException(
+            status_code=409,
+            detail="Pemusnahan lot harus disetujui terlebih dahulu oleh Kepala Dapur sebelum dicatat ke buku besar stok.",
+        )
+
+    all_already_disposed = (
+        row.disposal_executed_at is not None
+        and len(row.affected_lots) > 0
+        and all(al.lot_safety_status == "REJECTED_DISPOSED" for al in row.affected_lots)
+    )
+    if all_already_disposed:
+        return _to_incident_response(session, row)
+
+    now = _utcnow()
+    disposed_lots: List[str] = []
+    note_text = (
+        req.notes.strip()
+        if req.notes and req.notes.strip()
+        else "Pemusnahan fisik lot bahan selesai dilaksanakan oleh Petugas QC Pengelola Stok."
+    )
+
+    for al in row.affected_lots:
+        lot = session.get(InventoryLotORM, al.lot_id)
+        if lot is not None:
+            lot.safety_hold_status = "REJECTED_DISPOSED"
+            disposed_lots.append(lot.lot_code)
+            idemp_key = f"INC-DISP-{row.id}-{lot.id}"
+            existing_mov = session.execute(
+                select(InventoryMovementORM.id).where(
+                    InventoryMovementORM.kitchen_id == str(auth.kitchen_id),
+                    InventoryMovementORM.dataset_version_id == row.dataset_version_id,
+                    InventoryMovementORM.idempotency_key == idemp_key,
+                )
+            ).scalar_one_or_none()
+            if existing_mov is None and lot.recorded_raw_g > 0:
+                session.add(
+                    InventoryMovementORM(
+                        id=str(uuid4()),
+                        kitchen_id=str(auth.kitchen_id),
+                        dataset_version_id=row.dataset_version_id,
+                        ingredient_id=lot.ingredient_id,
+                        lot_id=lot.id,
+                        movement_type="DISPOSAL",
+                        quantity_delta_raw_g=-float(lot.recorded_raw_g),
+                        original_value=-round(float(lot.recorded_raw_g) / 1000.0, 4),
+                        original_unit="kg",
+                        idempotency_key=idemp_key,
+                        source_document_ref=f"INCIDENT:{row.id[:8]}",
+                        source_id=lot.source_id,
+                        event_at=now,
+                        quarantined=False,
+                        actor_user_id=str(auth.user_id),
+                        created_at=now,
+                    )
+                )
+        al.lot_safety_status = "REJECTED_DISPOSED"
+        al.updated_at = now
+        if req.notes and req.notes.strip():
+            al.reason_detail = note_text
+
+    row.status = IncidentStatusEnum.REJECTED.value
+    row.disposal_executed_by_user_id = str(auth.user_id)
+    row.disposal_executed_at = now
+    row.updated_at = now
+
+    session.add(
+        IncidentActionORM(
+            id=str(uuid4()),
+            incident_id=row.id,
+            kitchen_id=row.kitchen_id,
+            action_type="DISPOSAL_EXECUTED",
+            actor_user_id=str(auth.user_id),
+            actor_role=auth.role.value,
+            notes=note_text,
+            metadata_json={
+                "disposed_lots": disposed_lots,
+                "authorized_by_user_id": row.disposal_authorized_by_user_id,
+            },
+            created_at=now,
+        )
+    )
+    record_audit_event(
+        session,
+        action="incident.disposal_executed",
+        entity_type="ingredient_incident",
+        entity_id=row.id,
+        kitchen_id=auth.kitchen_id,
+        actor_user_id=auth.user_id,
+        actor_role=auth.role.value,
+        metadata={
+            "disposed_lots": disposed_lots,
+            "authorized_by_user_id": row.disposal_authorized_by_user_id,
+        },
     )
     session.commit()
     reloaded = _load_incident_orm(session, incident_id, fresh=True)

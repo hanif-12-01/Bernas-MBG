@@ -30,6 +30,14 @@ class KitchenMembershipInfo(BaseModel):
     is_default: bool
 
 
+class StockCustodianSummary(BaseModel):
+    is_assigned: bool = False
+    custodian_user_id: Optional[UUID] = None
+    custodian_username: Optional[str] = None
+    custodian_full_name: Optional[str] = None
+    effective_until: Optional[datetime] = None
+
+
 class AuthUserResponse(BaseModel):
     user_id: UUID
     username: str
@@ -40,6 +48,8 @@ class AuthUserResponse(BaseModel):
     active_kitchen_name: str
     active_role: RoleEnum
     csrf_token: str
+    is_active_stock_custodian: bool = False
+    stock_custodian: Optional[StockCustodianSummary] = None
     memberships: List[KitchenMembershipInfo]
 
 

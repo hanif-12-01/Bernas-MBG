@@ -12,6 +12,7 @@ import {
   YAxis,
 } from "recharts";
 
+import { useTheme } from "@/hooks/useTheme";
 import { formatDayLabel, formatIDR } from "@/lib/formatters/indonesian";
 import type { DayPlan } from "@/types/api";
 
@@ -21,6 +22,17 @@ interface DailyCostChartProps {
 }
 
 export function DailyCostChart({ days, budgetPerServing }: DailyCostChartProps) {
+  const { theme } = useTheme();
+  const isDark = theme === "dark";
+  const gridStroke = isDark ? "#263845" : "#E6EEE8";
+  const axisTickFill = isDark ? "#93AAB8" : "#4A6170";
+  const axisLineStroke = isDark ? "#263845" : "#DCE6DE";
+  const cursorFill = isDark ? "#182630" : "#F5F8F5";
+  const tooltipBg = isDark ? "#111C24" : "#FFFFFF";
+  const tooltipBorder = isDark ? "#263845" : "#DCE6DE";
+  const tooltipColor = isDark ? "#EBF2F6" : "#16354A";
+  const barFill = isDark ? "#14B8A6" : "#0F766E";
+
   if (days.length === 0) {
     return (
       <div className="rounded-2xl border border-[#DCE6DE] bg-white p-5">
@@ -67,27 +79,28 @@ export function DailyCostChart({ days, budgetPerServing }: DailyCostChartProps) 
       <div className="mt-4 h-64 w-full" role="img" aria-label="Grafik perbandingan biaya harian per porsi terhadap batas anggaran">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 12, right: 16, left: 4, bottom: 4 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#E6EEE8" vertical={false} />
+            <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} vertical={false} />
             <XAxis
               dataKey="shortName"
-              tick={{ fill: "#4A6170", fontSize: 12 }}
-              axisLine={{ stroke: "#DCE6DE" }}
+              tick={{ fill: axisTickFill, fontSize: 12 }}
+              axisLine={{ stroke: axisLineStroke }}
               tickLine={false}
             />
             <YAxis
               domain={[0, Math.ceil(maxVal / 1000) * 1000]}
-              tick={{ fill: "#4A6170", fontSize: 12 }}
+              tick={{ fill: axisTickFill, fontSize: 12 }}
               axisLine={false}
               tickLine={false}
               tickFormatter={(v: number) => `Rp${Math.round(v / 1000)}rb`}
             />
             <Tooltip
-              cursor={{ fill: "#F5F8F5" }}
+              cursor={{ fill: cursorFill }}
               contentStyle={{
+                backgroundColor: tooltipBg,
                 borderRadius: "12px",
-                borderColor: "#DCE6DE",
+                borderColor: tooltipBorder,
                 fontSize: "12px",
-                color: "#16354A",
+                color: tooltipColor,
               }}
               formatter={(value: number) => [formatIDR(value), "Biaya per Porsi"]}
             />
@@ -97,7 +110,7 @@ export function DailyCostChart({ days, budgetPerServing }: DailyCostChartProps) 
               strokeDasharray="6 4"
               strokeWidth={2}
             />
-            <Bar dataKey="cost" fill="#0F766E" radius={[8, 8, 0, 0]} maxBarSize={48} />
+            <Bar dataKey="cost" fill={barFill} radius={[8, 8, 0, 0]} maxBarSize={48} />
           </BarChart>
         </ResponsiveContainer>
       </div>

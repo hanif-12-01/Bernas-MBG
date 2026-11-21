@@ -70,6 +70,27 @@ export interface ApprovedPlanInventoryAlert {
   summary_message: string;
 }
 
+export interface IngredientCoverageForecast {
+  coverage_status:
+    | "SUFFICIENT"
+    | "LOW_COVERAGE"
+    | "EXPIRES_BEFORE_USE"
+    | "NO_ACTIVE_PLAN"
+    | "UNVERIFIED_OR_HELD"
+    | string;
+  planned_daily_usage_kg?: number | null;
+  planned_total_horizon_kg?: number | null;
+  estimated_coverage_days?: number | null;
+  horizon_days?: number | null;
+  covers_horizon_days?: boolean | null;
+  first_shortage_day_index?: number | null;
+  first_shortage_date?: string | null;
+  expires_before_use_kg: number;
+  plan_title?: string | null;
+  human_summary_id: string;
+  disclaimer: string;
+}
+
 export interface InventoryLotSummary {
   id: string;
   lot_code: string;
@@ -78,6 +99,10 @@ export interface InventoryLotSummary {
   damaged_raw_g: number;
   expires_at?: string | null;
   expiry_known: boolean;
+  received_at?: string | null;
+  supplier_name?: string | null;
+  purchase_document_id?: string | null;
+  days_until_expiry?: number | null;
   verification_status: string;
   safety_hold_status: "NONE" | "ON_HOLD" | "REJECTED_DISPOSED" | string;
   notes?: string | null;
@@ -117,7 +142,7 @@ export interface InventoryCatalogItem {
   price_region: string | null;
   price_observed_at: string | null;
   price_source_type: SourceTypeEnum | null;
-  price_provenance?: PriceProvenanceEnum;
+  price_provenance?: PriceProvenanceEnum | null;
   stock_raw_g: number | null;
   recorded_raw_g?: number | null;
   usable_raw_g?: number | null;
@@ -134,6 +159,11 @@ export interface InventoryCatalogItem {
   incoming_raw_g?: number;
   delivery_status?: string;
   quarantined_events_count?: number;
+  latest_supplier_name?: string | null;
+  latest_received_at?: string | null;
+  nearest_expiry_at?: string | null;
+  days_until_nearest_expiry?: number | null;
+  coverage?: IngredientCoverageForecast | null;
   data_quality_status?: string;
   data_classification?: string;
   last_verified_at?: string | null;
@@ -535,6 +565,14 @@ export interface KitchenMembershipInfo {
   is_default: boolean;
 }
 
+export interface StockCustodianSummary {
+  is_assigned: boolean;
+  custodian_user_id?: string | null;
+  custodian_username?: string | null;
+  custodian_full_name?: string | null;
+  effective_until?: string | null;
+}
+
 export interface AuthUserResponse {
   user_id: string;
   username: string;
@@ -545,6 +583,8 @@ export interface AuthUserResponse {
   active_kitchen_name: string;
   active_role: RoleEnum;
   csrf_token: string;
+  is_active_stock_custodian?: boolean;
+  stock_custodian?: StockCustodianSummary | null;
   memberships: KitchenMembershipInfo[];
 }
 
@@ -755,6 +795,10 @@ export interface ManagerDashboardSummary {
   effective_operational_plans?: OperationalPlanAssignmentResponse[];
   approved_awaiting_activation?: MenuReviewResponse[];
   active_incidents_count?: number;
+  pending_disposal_authorizations_count?: number;
+  pending_purchase_evidence_count?: number;
+  pending_purchase_documents?: PurchaseDocumentResponse[];
+  stock_custodian?: StockCustodianSummary | null;
   inventory_dataset_name?: string | null;
   inventory_dataset_is_synthetic?: boolean | null;
   recent_audit_events: AuditEventResponse[];
@@ -765,14 +809,33 @@ export interface QCDashboardSummary {
   kitchen_id: string;
   kitchen_name: string;
   simulation_only: boolean;
+  is_active_stock_custodian?: boolean;
+  stock_custodian?: StockCustodianSummary | null;
   available_menu_plans: MenuReviewResponse[];
   effective_operational_plans?: OperationalPlanAssignmentResponse[];
   held_operational_plans?: OperationalPlanAssignmentResponse[];
   active_incidents_count?: number;
+  pending_disposal_executions_count?: number;
+  pending_disposal_incidents?: IngredientIncidentResponse[];
   action_required_inspections: QCInspectionResponse[];
   submitted_or_reviewed_inspections: QCInspectionResponse[];
   total_inspections_count: number;
   vision_provider_status: VisionProviderStatus;
+}
+
+export interface PlannerDashboardSummary {
+  kitchen_id: string;
+  kitchen_name: string;
+  simulation_only: boolean;
+  stock_custodian?: StockCustodianSummary | null;
+  effective_operational_plans: OperationalPlanAssignmentResponse[];
+  held_operational_plans: OperationalPlanAssignmentResponse[];
+  open_incidents_requiring_recovery: IngredientIncidentResponse[];
+  draft_or_revision_reviews: MenuReviewResponse[];
+  submitted_reviews_count: number;
+  approved_reviews_count: number;
+  approved_plan_inventory_alerts: ApprovedPlanInventoryAlert[];
+  low_stock_alerts: LowStockAlert[];
 }
 
 export type DisruptionTypeEnum =
@@ -1093,10 +1156,10 @@ export interface IncidentAffectedLotInput {
 }
 
 export interface IncidentCreateRequest {
-  title: string;
+  title?: string | null;
   category: IncidentCategoryEnum;
   severity?: IncidentSeverityEnum;
-  notes: string;
+  notes?: string | null;
   dataset_version_id?: string | null;
   observed_at?: string | null;
   supplier_name?: string | null;
@@ -1222,10 +1285,233 @@ export interface IngredientIncidentResponse {
   exposure_status: string;
   production_exposures: ProductionExposureItem[];
   recovery_event_id: string | null;
+  disposal_authorized?: boolean;
+  disposal_authorized_by_name?: string | null;
+  disposal_authorized_at?: string | null;
+  disposal_executed_by_name?: string | null;
+  disposal_executed_at?: string | null;
   images: IncidentImageInfo[];
   actions: IncidentActionResponse[];
   safety_notice: string;
   simulation_only: boolean;
+}
+
+// ---- Post-Sprint 3C: Stock Custodian, Manual Adjustment, Detail & Procurement ----
+
+export interface EligibleCustodianCandidate {
+  user_id: string;
+  username: string;
+  full_name: string;
+  email: string;
+  is_active_custodian: boolean;
+}
+
+export interface CustodianAssignmentResponse {
+  id: string;
+  kitchen_id: string;
+  custodian_user_id: string;
+  custodian_username: string;
+  custodian_full_name: string;
+  assigned_by_user_id?: string | null;
+  assigned_by_name?: string | null;
+  status: "ACTIVE" | "REVOKED" | "EXPIRED" | string;
+  effective_from: string;
+  effective_until?: string | null;
+  revoked_at?: string | null;
+  revoked_by_user_id?: string | null;
+  notes?: string | null;
+  created_at: string;
+}
+
+export interface KitchenStockCustodianStatusResponse {
+  kitchen_id: string;
+  kitchen_code: string;
+  kitchen_name: string;
+  active_assignment?: CustodianAssignmentResponse | null;
+  eligible_qc_candidates: EligibleCustodianCandidate[];
+  history: CustodianAssignmentResponse[];
+}
+
+export type ManualStockAdjustmentTypeEnum =
+  | "PURCHASE_RECEIPT"
+  | "USAGE_CONSUMPTION"
+  | "SPOILAGE_DAMAGE"
+  | "STOCK_OPNAME_COUNT"
+  | "STOCK_CORRECTION";
+
+export interface ManualStockAdjustmentRequest {
+  dataset_version_id?: string | null;
+  ingredient_code: string;
+  lot_code?: string | null;
+  adjustment_type: ManualStockAdjustmentTypeEnum;
+  quantity: number;
+  unit?: string;
+  expires_at?: string | null;
+  supplier_name?: string | null;
+  source_document_ref?: string | null;
+  notes?: string | null;
+  idempotency_key?: string | null;
+}
+
+export interface ManualStockAdjustmentResponse {
+  movement_id: string;
+  lot_id: string;
+  lot_code: string;
+  ingredient_code: string;
+  ingredient_name: string;
+  adjustment_type: ManualStockAdjustmentTypeEnum;
+  recorded_raw_g: number;
+  damaged_raw_g: number;
+  verified_physical_raw_g?: number | null;
+  verification_status: string;
+  safety_hold_status: string;
+  supplier_name?: string | null;
+  duplicate_skipped: boolean;
+  message: string;
+}
+
+export interface InventoryMovementSummaryItem {
+  id: string;
+  movement_type: string;
+  quantity_delta_raw_g: number;
+  original_value: number;
+  original_unit: string;
+  lot_code?: string | null;
+  source_document_ref?: string | null;
+  event_at: string;
+  quarantined: boolean;
+  quarantine_reason?: string | null;
+  actor_name?: string | null;
+}
+
+export interface InventoryActiveIncidentHint {
+  id: string;
+  title: string;
+  category: string;
+  severity: string;
+  status: string;
+  observed_at: string;
+  total_held_kg: number;
+}
+
+export interface InventoryIngredientDetailResponse {
+  ingredient: InventoryCatalogItem;
+  recent_movements: InventoryMovementSummaryItem[];
+  active_incidents: InventoryActiveIncidentHint[];
+}
+
+export type EvidenceStatusEnum =
+  | "NO_EVIDENCE"
+  | "RECEIPT_UPLOADED"
+  | "GOODS_RECEIVED"
+  | "VERIFIED_MATCH"
+  | "DISCREPANCY_FLAGGED";
+
+export type GoodsConditionEnum = "GOOD" | "DAMAGED" | "QUARANTINED" | "REJECTED";
+
+export interface PurchaseDocumentLineInput {
+  ingredient_code?: string | null;
+  item_name: string;
+  quantity: number;
+  unit?: string;
+  unit_price_idr?: number | null;
+  line_total_idr?: number | null;
+  lot_code_hint?: string | null;
+  expiry_date_hint?: string | null;
+}
+
+export interface PurchaseDocumentCreateRequest {
+  dataset_version_id?: string | null;
+  linked_run_id?: string | null;
+  linked_recovery_event_id?: string | null;
+  supplier_name: string;
+  supplier_contact?: string | null;
+  invoice_number?: string | null;
+  purchase_date?: string | null;
+  total_amount_idr?: number | null;
+  notes?: string | null;
+  lines?: PurchaseDocumentLineInput[];
+}
+
+export interface PurchaseDocumentLineResponse {
+  id: string;
+  ingredient_id?: string | null;
+  ingredient_code?: string | null;
+  item_name: string;
+  quantity_raw_g: number;
+  unit_label: string;
+  unit_price_idr?: number | null;
+  line_total_idr?: number | null;
+  lot_code_hint?: string | null;
+  expiry_date_hint?: string | null;
+}
+
+export interface PurchaseDocumentResponse {
+  id: string;
+  kitchen_id: string;
+  dataset_version_id: string;
+  linked_run_id?: string | null;
+  linked_recovery_event_id?: string | null;
+  supplier_name: string;
+  supplier_contact?: string | null;
+  invoice_number?: string | null;
+  purchase_date: string;
+  total_amount_idr?: number | null;
+  evidence_status: EvidenceStatusEnum;
+  has_evidence_file: boolean;
+  document_mime_type?: string | null;
+  document_sha256?: string | null;
+  document_size_bytes?: number | null;
+  document_original_filename?: string | null;
+  exif_stripped?: boolean | null;
+  evidence_url?: string | null;
+  recorded_by_user_id?: string | null;
+  recorded_by_name?: string | null;
+  reviewed_by_user_id?: string | null;
+  reviewed_by_name?: string | null;
+  reviewed_at?: string | null;
+  notes?: string | null;
+  lines: PurchaseDocumentLineResponse[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GoodsReceiptCreateRequest {
+  dataset_version_id?: string | null;
+  purchase_document_id?: string | null;
+  ingredient_code: string;
+  lot_code?: string | null;
+  received_quantity: number;
+  unit?: string;
+  expiry_date?: string | null;
+  supplier_name?: string | null;
+  condition_status?: GoodsConditionEnum;
+  notes?: string | null;
+  idempotency_key?: string | null;
+}
+
+export interface GoodsReceiptResponse {
+  id: string;
+  kitchen_id: string;
+  purchase_document_id?: string | null;
+  dataset_version_id: string;
+  ingredient_id?: string | null;
+  ingredient_code: string;
+  ingredient_name: string;
+  lot_id?: string | null;
+  lot_code: string;
+  received_raw_g: number;
+  expiry_date?: string | null;
+  supplier_name?: string | null;
+  condition_status: GoodsConditionEnum;
+  lot_verification_status: string;
+  lot_safety_hold_status: string;
+  usable_added_raw_g: number;
+  received_by_user_id?: string | null;
+  received_by_name?: string | null;
+  received_at: string;
+  notes?: string | null;
+  created_at: string;
 }
 
 export interface IncidentStartRecoveryRequest {

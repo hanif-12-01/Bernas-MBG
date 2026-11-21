@@ -6,13 +6,19 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from sqlalchemy.orm import Session
 
-from app.auth.dependencies import AuthContext, get_db_session, require_roles
+from app.auth.dependencies import (
+    AuthContext,
+    get_db_session,
+    require_active_stock_custodian,
+    require_roles,
+)
 from app.auth.schemas import RoleEnum
 from app.incidents.schemas import (
     IncidentActionResponse,
     IncidentCreateRequest,
     IncidentImageInfo,
     IncidentImpactSummaryResponse,
+    IncidentRecordDisposalRequest,
     IncidentReleaseHoldRequest,
     IncidentStartRecoveryRequest,
     IncidentStatusUpdateRequest,
@@ -24,6 +30,7 @@ from app.incidents.service import (
     get_incident_image_bytes,
     get_incident_impact,
     list_incidents,
+    record_incident_disposal,
     release_safety_hold_blocked,
     report_ingredient_incident,
     start_recovery_for_incident,
@@ -39,9 +46,7 @@ router = APIRouter(prefix="/incidents", tags=["incidents"])
 @router.post("", response_model=IngredientIncidentResponse, status_code=201)
 def api_create_incident(
     req: IncidentCreateRequest,
-    auth: AuthContext = Depends(
-        require_roles(RoleEnum.QC_OFFICER, RoleEnum.KITCHEN_MANAGER, RoleEnum.MENU_PLANNER)
-    ),
+    auth: AuthContext = Depends(require_active_stock_custodian),
     session: Session = Depends(get_db_session),
 ) -> IngredientIncidentResponse:
     return report_ingredient_incident(session, auth, req)
@@ -83,10 +88,21 @@ def api_get_incident_impact(
 def api_update_incident_status(
     incident_id: UUID,
     req: IncidentStatusUpdateRequest,
-    auth: AuthContext = Depends(require_roles(RoleEnum.KITCHEN_MANAGER, RoleEnum.QC_OFFICER)),
+    auth: AuthContext = Depends(require_roles(RoleEnum.KITCHEN_MANAGER)),
     session: Session = Depends(get_db_session),
 ) -> IngredientIncidentResponse:
     return update_incident_status(session, auth, incident_id, req)
+
+
+@router.post("/{incident_id}/record-disposal", response_model=IngredientIncidentResponse)
+def api_record_incident_disposal(
+    incident_id: UUID,
+    req: IncidentRecordDisposalRequest = IncidentRecordDisposalRequest(),
+    auth: AuthContext = Depends(require_active_stock_custodian),
+    session: Session = Depends(get_db_session),
+) -> IngredientIncidentResponse:
+    """Execute physical disposal of held lots after Kitchen Manager authorization."""
+    return record_incident_disposal(session, auth, incident_id, req)
 
 
 @router.post("/{incident_id}/release-hold", status_code=403)
@@ -115,9 +131,7 @@ def api_start_incident_recovery(
 async def api_upload_incident_image(
     incident_id: UUID,
     file: UploadFile = File(...),
-    auth: AuthContext = Depends(
-        require_roles(RoleEnum.QC_OFFICER, RoleEnum.KITCHEN_MANAGER, RoleEnum.MENU_PLANNER)
-    ),
+    auth: AuthContext = Depends(require_active_stock_custodian),
     session: Session = Depends(get_db_session),
 ) -> IncidentImageInfo:
     raw = await file.read(MAX_QC_IMAGE_BYTES + 1)

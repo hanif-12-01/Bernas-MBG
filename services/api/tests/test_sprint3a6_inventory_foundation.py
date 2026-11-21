@@ -124,6 +124,7 @@ def test_20kg_recorded_12kg_usable_and_optimizer_uses_verified_bound() -> None:
 def test_partial_delivery_and_duplicate_delivery_idempotency() -> None:
     """Scenario B & Scenario D + Acceptance #3 & #9: Partial delivery 12/20 kg and duplicate import safety."""
     planner_a = make_authenticated_client("perencana_menu")
+    qc_a = make_authenticated_client("petugas_qc")
     imp_ds = planner_a.post(
         "/api/v1/datasets/import",
         data={"name": "Batch Idempotency & Partial Delivery Test"},
@@ -142,7 +143,15 @@ def test_partial_delivery_and_duplicate_delivery_idempotency() -> None:
         "OPENING_BALANCE,C_ING7,LOT-F1,50,kg,,,2026-11-24T23:59:59Z,true,2026-11-20T06:30:00Z,KEY-F1-OP,DOC-03,,,,Fruit stock\n"
         "GOODS_RECEIPT,C_ING1,LOT-B1,500,g,kg,,,true,2026-11-20T07:00:00Z,KEY-B1-UNITCONFLICT,SJ-ERR,,,,500 g misclaimed as kg\n"
     )
-    res1 = planner_a.post(
+    # Planner is NOT stock custodian -> 403
+    planner_denied = planner_a.post(
+        "/api/v1/inventory/transactions/import",
+        data={"dataset_version_id": ds_id, "data_classification": "synthetic", "dry_run": "false"},
+        files={"transactions_file": ("tx.csv", tx_csv.encode("utf-8"), "text/csv")},
+    )
+    assert planner_denied.status_code == 403
+
+    res1 = qc_a.post(
         "/api/v1/inventory/transactions/import",
         data={
             "dataset_version_id": ds_id,
@@ -158,7 +167,7 @@ def test_partial_delivery_and_duplicate_delivery_idempotency() -> None:
     assert j1["duplicate_skipped_count"] == 0
 
     # Repeat the exact same import -> must NOT double stock!
-    res2 = planner_a.post(
+    res2 = qc_a.post(
         "/api/v1/inventory/transactions/import",
         data={
             "dataset_version_id": ds_id,
@@ -222,7 +231,7 @@ def test_unknown_missing_inventory_blocks_imaginary_stock_in_optimizer() -> None
         "OPENING_BALANCE,C_ING8,LOT-F2,50,kg,2026-11-20T06:00:00Z,2026-11-25T23:59:59Z,UNK-F2\n"
         "OPENING_BALANCE,C_ING9,LOT-S1,20,kg,2026-11-20T06:00:00Z,2026-12-30T23:59:59Z,UNK-S1\n"
     )
-    r_tx = planner_a.post(
+    r_tx = make_authenticated_client("petugas_qc").post(
         "/api/v1/inventory/transactions/import",
         data={"dataset_version_id": ds_id},
         files={"transactions_file": ("tx.csv", tx_csv.encode("utf-8"), "text/csv")},
@@ -433,11 +442,12 @@ def test_phase2_market_reference_separation_and_phase3_authorization_and_approve
     assert demo_by_code["ING007"]["market_references"][0]["price_value"] == pytest.approx(39000.0)
 
     # 2. Phase 3: Importing pilot_real without authorization_confirmed=true must fail 403
+    qc_a = make_authenticated_client("petugas_qc")
     pilot_csv = (
         "event_type,ingredient_code,lot_code,quantity,unit,event_at,expires_at,idempotency_key\n"
         "OPENING_BALANCE,ING007,LOT-PILOT-AYAM,15,kg,2026-11-20T06:00:00Z,2026-11-25T23:59:59Z,PILOT-AYAM-01\n"
     )
-    denied = planner_a.post(
+    denied = qc_a.post(
         "/api/v1/inventory/transactions/import",
         data={
             "dataset_version_id": str(INVENTORY_QUALITY_DATASET_ID),
@@ -478,7 +488,7 @@ def test_phase2_market_reference_separation_and_phase3_authorization_and_approve
         "event_type,ingredient_code,lot_code,quantity,unit,event_at,idempotency_key\n"
         "DAMAGE,ING001,LOT-ING001-BASE,44.5,kg,2026-11-20T09:00:00Z,DROP-BERAS-ALERT-01\n"
     )
-    drop_res = planner_a.post(
+    drop_res = qc_a.post(
         "/api/v1/inventory/transactions/import",
         data={"dataset_version_id": str(INVENTORY_QUALITY_DATASET_ID)},
         files={"transactions_file": ("drop.csv", drop_csv.encode("utf-8"), "text/csv")},

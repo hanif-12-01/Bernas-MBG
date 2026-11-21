@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-teal-primary: #0F766E;
   --color-teal-hover: #0B5F58;
@@ -38,12 +40,22 @@
   scroll-padding-top: 5rem;
 }
 
+:root.dark {
+  color-scheme: dark;
+}
+
 html,
 body {
   background-color: #F5F8F5;
   color: #16354A;
-  font-family: var(--font-plus-jakarta), "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-plus-jakarta), "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+:root.dark,
+:root.dark body {
+  background-color: #0B1319;
+  color: #EBF2F6;
 }
 
 .tabular-nums {
@@ -53,6 +65,141 @@ body {
 *:focus-visible {
   outline: 2px solid #0F766E;
   outline-offset: 2px;
+}
+
+:root.dark *:focus-visible {
+  outline: 2px solid #2DD4BF;
+  outline-offset: 2px;
+}
+
+:root.dark input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+:root.dark select,
+:root.dark textarea {
+  background-color: #0E171E;
+  color: #EBF2F6;
+  border-color: #314758;
+}
+
+:root.dark input::placeholder,
+:root.dark textarea::placeholder {
+  color: #7E96A6;
+}
+
+/* Global Dark Mode surface, text, border, and semantic token adaptation */
+@layer utilities {
+  :where(.dark, .dark *) .bg-\[\#F5F8F5\] { background-color: #0B1319; }
+  :where(.dark, .dark *) .bg-\[\#F5F8F5\]\/60 { background-color: rgb(24 38 48 / 0.72); }
+  :where(.dark, .dark *) .bg-white { background-color: #111C24; }
+  :where(.dark, .dark *) .bg-white\/95 { background-color: rgb(17 28 36 / 0.94); }
+  :where(.dark, .dark *) .bg-\[\#EEF3EE\],
+  :where(.dark, .dark *) .bg-\[\#E6EEE8\],
+  :where(.dark, .dark *) .bg-slate-50,
+  :where(.dark, .dark *) .bg-slate-100 { background-color: #182630; }
+  :where(.dark, .dark *) .bg-slate-50\/60 { background-color: rgb(24 38 48 / 0.65); }
+  :where(.dark, .dark *) .bg-slate-50\/70 { background-color: rgb(24 38 48 / 0.75); }
+  :where(.dark, .dark *) .bg-\[\#F4FAF9\] { background-color: #102625; }
+  :where(.dark, .dark *) .bg-\[\#EBF6F5\],
+  :where(.dark, .dark *) .bg-\[\#DDF0EE\] { background-color: #102D2B; }
+
+  :where(.dark, .dark *) .bg-\[\#ECFDF3\],
+  :where(.dark, .dark *) .bg-emerald-50,
+  :where(.dark, .dark *) .bg-emerald-100 { background-color: #0D291A; }
+  :where(.dark, .dark *) .bg-emerald-50\/60,
+  :where(.dark, .dark *) .bg-emerald-50\/70,
+  :where(.dark, .dark *) .bg-emerald-50\/80 { background-color: rgb(13 41 26 / 0.85); }
+
+  :where(.dark, .dark *) .bg-\[\#FEF6E7\],
+  :where(.dark, .dark *) .bg-\[\#FFFBEB\],
+  :where(.dark, .dark *) .bg-\[\#FFFDF7\],
+  :where(.dark, .dark *) .bg-\[\#FDECC8\],
+  :where(.dark, .dark *) .bg-amber-50,
+  :where(.dark, .dark *) .bg-amber-100 { background-color: #2B1F0A; }
+  :where(.dark, .dark *) .bg-amber-50\/50,
+  :where(.dark, .dark *) .bg-amber-50\/70 { background-color: rgb(43 31 10 / 0.75); }
+
+  :where(.dark, .dark *) .bg-\[\#FEF0F0\],
+  :where(.dark, .dark *) .bg-\[\#FFF5F5\],
+  :where(.dark, .dark *) .bg-rose-50,
+  :where(.dark, .dark *) .bg-rose-100 { background-color: #2D1216; }
+
+  :where(.dark, .dark *) .bg-\[\#16354A\]\/40 { background-color: rgb(4 10 15 / 0.72); }
+
+  :where(.dark, .dark *) .hover\:bg-\[\#F5F8F5\]:hover,
+  :where(.dark, .dark *) .hover\:bg-slate-50:hover,
+  :where(.dark, .dark *) .hover\:bg-slate-100:hover,
+  :where(.dark, .dark *) .hover\:bg-white:hover { background-color: #1B2B37; }
+  :where(.dark, .dark *) .hover\:bg-\[\#EBF6F5\]:hover,
+  :where(.dark, .dark *) .hover\:bg-\[\#DDF0EE\]:hover { background-color: #153E3B; }
+  :where(.dark, .dark *) .hover\:bg-\[\#FEF0F0\]:hover,
+  :where(.dark, .dark *) .hover\:bg-rose-100:hover { background-color: #3E181E; }
+
+  :where(.dark, .dark *) .border-\[\#DCE6DE\],
+  :where(.dark, .dark *) .border-\[\#C7D6CB\],
+  :where(.dark, .dark *) .border-slate-200,
+  :where(.dark, .dark *) .border-slate-300 { border-color: #273A48; }
+  :where(.dark, .dark *) .border-\[\#EEF3EE\],
+  :where(.dark, .dark *) .border-slate-100 { border-color: #1E2E3A; }
+  :where(.dark, .dark *) .border-\[\#B5DFDA\] { border-color: #1F5752; }
+  :where(.dark, .dark *) .border-\[\#BBE9CC\],
+  :where(.dark, .dark *) .border-emerald-200 { border-color: #1D5E3A; }
+  :where(.dark, .dark *) .border-\[\#F5D59B\],
+  :where(.dark, .dark *) .border-\[\#F3D19B\],
+  :where(.dark, .dark *) .border-amber-200,
+  :where(.dark, .dark *) .border-amber-300 { border-color: #6E4A12; }
+  :where(.dark, .dark *) .border-\[\#F5C2C2\],
+  :where(.dark, .dark *) .border-rose-200,
+  :where(.dark, .dark *) .border-rose-300 { border-color: #6E242C; }
+
+  :where(.dark, .dark *) .divide-\[\#EEF3EE\] > :not(:last-child),
+  :where(.dark, .dark *) .divide-slate-100 > :not(:last-child) { border-color: #1E2E3A; }
+  :where(.dark, .dark *) .divide-\[\#FEE2E2\] > :not(:last-child) { border-color: #4D1D23; }
+
+  :where(.dark, .dark *) .text-\[\#16354A\],
+  :where(.dark, .dark *) .text-slate-900,
+  :where(.dark, .dark *) .text-slate-950,
+  :where(.dark, .dark *) .text-slate-800 { color: #EBF2F6; }
+
+  :where(.dark, .dark *) .text-\[\#334E5E\],
+  :where(.dark, .dark *) .text-\[\#4A6170\],
+  :where(.dark, .dark *) .text-\[\#526675\],
+  :where(.dark, .dark *) .text-slate-700,
+  :where(.dark, .dark *) .text-slate-600 { color: #A3B7C4; }
+
+  :where(.dark, .dark *) .text-\[\#647A87\],
+  :where(.dark, .dark *) .text-slate-500,
+  :where(.dark, .dark *) .text-slate-400 { color: #7E96A6; }
+
+  :where(.dark, .dark *) .text-\[\#0F766E\] { color: #2DD4BF; }
+  :where(.dark, .dark *) .hover\:text-\[\#16354A\]:hover { color: #EBF2F6; }
+
+  :where(.dark, .dark *) .text-\[\#166534\],
+  :where(.dark, .dark *) .text-\[\#15803D\],
+  :where(.dark, .dark *) .text-emerald-600,
+  :where(.dark, .dark *) .text-emerald-700,
+  :where(.dark, .dark *) .text-emerald-800,
+  :where(.dark, .dark *) .text-emerald-900,
+  :where(.dark, .dark *) .text-emerald-950 { color: #4ADE80; }
+
+  :where(.dark, .dark *) .text-\[\#8A5300\],
+  :where(.dark, .dark *) .text-\[\#92400E\],
+  :where(.dark, .dark *) .text-\[\#B45309\],
+  :where(.dark, .dark *) .text-\[\#B4690E\],
+  :where(.dark, .dark *) .text-amber-700,
+  :where(.dark, .dark *) .text-amber-800,
+  :where(.dark, .dark *) .text-amber-900,
+  :where(.dark, .dark *) .text-amber-950 { color: #FBBF24; }
+
+  :where(.dark, .dark *) .text-\[\#991B1B\],
+  :where(.dark, .dark *) .text-\[\#7F1D1D\],
+  :where(.dark, .dark *) .text-\[\#C43D3D\],
+  :where(.dark, .dark *) .text-rose-600,
+  :where(.dark, .dark *) .text-rose-700,
+  :where(.dark, .dark *) .text-rose-800,
+  :where(.dark, .dark *) .text-rose-900,
+  :where(.dark, .dark *) .text-rose-950 { color: #FB7185; }
+  :where(.dark, .dark *) .hover\:text-\[\#991B1B\]:hover { color: #FDA4AF; }
+
+  :where(.dark, .dark *) .text-indigo-700 { color: #818CF8; }
 }
 
 @media (max-width: 639px) {

@@ -9,9 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import AuthContext, get_db_session, require_roles
-from app.auth.schemas import AuditEventResponse, RoleEnum
-from app.db.models import AuditEventORM, IngredientIncidentORM, UserORM
+from app.auth.schemas import AuditEventResponse, RoleEnum, StockCustodianSummary
+from app.db.models import AuditEventORM, IngredientIncidentORM, PurchaseDocumentORM, UserORM
 from app.db.repository import SQLiteVaultRepository
+from app.incidents.schemas import IngredientIncidentResponse
+from app.incidents.service import list_incidents
 from app.inventory.service import (
     ApprovedPlanInventoryAlert,
     compute_usable_inventory,
@@ -19,6 +21,8 @@ from app.inventory.service import (
 )
 from app.operations.schemas import OperationalPlanAssignmentResponse
 from app.operations.service import list_operational_plan_assignments
+from app.procurement.schemas import EvidenceStatusEnum, PurchaseDocumentResponse
+from app.procurement.service import list_purchase_documents
 from app.reviews.schemas import MenuReviewResponse, MenuReviewStatusEnum
 from app.reviews.service import list_menu_reviews
 from app.vision.provider import get_vision_provider_status
@@ -55,6 +59,10 @@ class ManagerDashboardSummary(BaseModel):
     effective_operational_plans: List[OperationalPlanAssignmentResponse] = Field(default_factory=list)
     approved_awaiting_activation: List[MenuReviewResponse] = Field(default_factory=list)
     active_incidents_count: int = 0
+    pending_disposal_authorizations_count: int = 0
+    pending_purchase_evidence_count: int = 0
+    pending_purchase_documents: List[PurchaseDocumentResponse] = Field(default_factory=list)
+    stock_custodian: Optional[StockCustodianSummary] = None
     inventory_dataset_name: Optional[str] = None
     inventory_dataset_is_synthetic: Optional[bool] = None
     recent_audit_events: List[AuditEventResponse] = Field(default_factory=list)
@@ -65,14 +73,33 @@ class QCDashboardSummary(BaseModel):
     kitchen_id: UUID
     kitchen_name: str
     simulation_only: bool = True
+    is_active_stock_custodian: bool = False
+    stock_custodian: Optional[StockCustodianSummary] = None
     available_menu_plans: List[MenuReviewResponse] = Field(default_factory=list)
     effective_operational_plans: List[OperationalPlanAssignmentResponse] = Field(default_factory=list)
     held_operational_plans: List[OperationalPlanAssignmentResponse] = Field(default_factory=list)
     active_incidents_count: int = 0
+    pending_disposal_executions_count: int = 0
+    pending_disposal_incidents: List[IngredientIncidentResponse] = Field(default_factory=list)
     action_required_inspections: List[QCInspectionResponse] = Field(default_factory=list)
     submitted_or_reviewed_inspections: List[QCInspectionResponse] = Field(default_factory=list)
     total_inspections_count: int
     vision_provider_status: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PlannerDashboardSummary(BaseModel):
+    kitchen_id: UUID
+    kitchen_name: str
+    simulation_only: bool = True
+    stock_custodian: Optional[StockCustodianSummary] = None
+    effective_operational_plans: List[OperationalPlanAssignmentResponse] = Field(default_factory=list)
+    held_operational_plans: List[OperationalPlanAssignmentResponse] = Field(default_factory=list)
+    open_incidents_requiring_recovery: List[IngredientIncidentResponse] = Field(default_factory=list)
+    draft_or_revision_reviews: List[MenuReviewResponse] = Field(default_factory=list)
+    submitted_reviews_count: int = 0
+    approved_reviews_count: int = 0
+    approved_plan_inventory_alerts: List[ApprovedPlanInventoryAlert] = Field(default_factory=list)
+    low_stock_alerts: List[LowStockAlert] = Field(default_factory=list)
 
 
 @router.get("/manager-summary", response_model=ManagerDashboardSummary)
@@ -184,6 +211,27 @@ def api_manager_summary(
         for a in audit_rows
     ]
 
+    all_docs = list_purchase_documents(session, auth, limit=30)
+    pending_docs = [
+        d
+        for d in all_docs
+        if d.evidence_status
+        in {
+            EvidenceStatusEnum.NO_EVIDENCE,
+            EvidenceStatusEnum.RECEIPT_UPLOADED,
+            EvidenceStatusEnum.GOODS_RECEIVED,
+        }
+    ]
+    pending_disposal_auth = len(
+        session.execute(
+            select(IngredientIncidentORM.id).where(
+                IngredientIncidentORM.kitchen_id == str(auth.kitchen_id),
+                IngredientIncidentORM.status.in_(["REPORTED", "ON_HOLD", "UNDER_REVIEW"]),
+                IngredientIncidentORM.disposal_authorized.is_(False),
+            )
+        ).all()
+    )
+
     return ManagerDashboardSummary(
         kitchen_id=auth.kitchen_id,
         kitchen_name=auth.kitchen_name,
@@ -201,6 +249,10 @@ def api_manager_summary(
         effective_operational_plans=effective_ops,
         approved_awaiting_activation=awaiting_activation,
         active_incidents_count=active_inc_count,
+        pending_disposal_authorizations_count=pending_disposal_auth,
+        pending_purchase_evidence_count=len(pending_docs),
+        pending_purchase_documents=pending_docs[:6],
+        stock_custodian=auth.stock_custodian,
         inventory_dataset_name=inventory_dataset.name if inventory_dataset else None,
         inventory_dataset_is_synthetic=inventory_dataset.is_synthetic if inventory_dataset else None,
         recent_audit_events=recent_audits,
@@ -226,14 +278,15 @@ def api_qc_summary(
     )
     active_ops = [p for p in effective_ops if p.operational_status.value == "ACTIVE"]
     held_ops = [p for p in effective_ops if p.operational_status.value == "ON_HOLD"]
-    active_inc_count = len(
-        session.execute(
-            select(IngredientIncidentORM.id).where(
-                IngredientIncidentORM.kitchen_id == str(auth.kitchen_id),
-                IngredientIncidentORM.status.in_(["REPORTED", "ON_HOLD", "UNDER_REVIEW"]),
-            )
-        ).all()
+    all_incidents = list_incidents(session, auth)
+    active_inc_count = sum(
+        1 for inc in all_incidents if inc.status.value in {"REPORTED", "ON_HOLD", "UNDER_REVIEW"}
     )
+    pending_disposal_incidents = [
+        inc
+        for inc in all_incidents
+        if inc.disposal_authorized and inc.disposal_executed_at is None
+    ]
     all_inspections = list_inspections(session, auth)
     action_required = [
         i
@@ -254,12 +307,80 @@ def api_qc_summary(
         kitchen_id=auth.kitchen_id,
         kitchen_name=auth.kitchen_name,
         simulation_only=True,
+        is_active_stock_custodian=auth.is_active_stock_custodian,
+        stock_custodian=auth.stock_custodian,
         available_menu_plans=relevant_plans,
         effective_operational_plans=active_ops,
         held_operational_plans=held_ops,
         active_incidents_count=active_inc_count,
+        pending_disposal_executions_count=len(pending_disposal_incidents),
+        pending_disposal_incidents=pending_disposal_incidents[:6],
         action_required_inspections=action_required,
         submitted_or_reviewed_inspections=submitted_or_reviewed,
         total_inspections_count=len(all_inspections),
         vision_provider_status=get_vision_provider_status(),
+    )
+
+
+@router.get("/planner-summary", response_model=PlannerDashboardSummary)
+def api_planner_summary(
+    auth: AuthContext = Depends(require_roles(RoleEnum.MENU_PLANNER, RoleEnum.KITCHEN_MANAGER)),
+    session: Session = Depends(get_db_session),
+) -> PlannerDashboardSummary:
+    repo = SQLiteVaultRepository(session)
+    all_reviews = list_menu_reviews(session, auth)
+    draft_or_revision = [
+        r
+        for r in all_reviews
+        if r.status in {MenuReviewStatusEnum.DRAFT, MenuReviewStatusEnum.REVISION_REQUIRED}
+    ]
+    submitted_count = sum(1 for r in all_reviews if r.status == MenuReviewStatusEnum.SUBMITTED)
+    approved_count = sum(1 for r in all_reviews if r.status == MenuReviewStatusEnum.APPROVED)
+
+    effective_ops = list_operational_plan_assignments(
+        session, auth.kitchen_id, include_superseded=False
+    )
+    active_ops = [p for p in effective_ops if p.operational_status.value == "ACTIVE"]
+    held_ops = [p for p in effective_ops if p.operational_status.value == "ON_HOLD"]
+
+    all_incidents = list_incidents(session, auth)
+    open_recovery_incidents = [
+        inc
+        for inc in all_incidents
+        if inc.status.value in {"REPORTED", "ON_HOLD", "UNDER_REVIEW"}
+        and inc.recovery_event_id is None
+    ]
+
+    ds_id = repo.get_active_dataset_id(auth.kitchen_id)
+    avail = compute_usable_inventory(
+        session,
+        kitchen_id=auth.kitchen_id,
+        dataset_version_id=ds_id,
+    )
+    low_stock = [
+        LowStockAlert(
+            ingredient_code=av.ingredient_code,
+            ingredient_name=av.ingredient_name,
+            stock_raw_g=av.usable_raw_g if av.usable_raw_g is not None else 0.0,
+        )
+        for av in avail.items
+        if av.usable_raw_g is None or av.usable_raw_g < 10000
+    ]
+    approved_inv_alerts = evaluate_approved_plans_against_inventory(
+        session, kitchen_id=auth.kitchen_id
+    )
+
+    return PlannerDashboardSummary(
+        kitchen_id=auth.kitchen_id,
+        kitchen_name=auth.kitchen_name,
+        simulation_only=True,
+        stock_custodian=auth.stock_custodian,
+        effective_operational_plans=active_ops,
+        held_operational_plans=held_ops,
+        open_incidents_requiring_recovery=open_recovery_incidents,
+        draft_or_revision_reviews=draft_or_revision,
+        submitted_reviews_count=submitted_count,
+        approved_reviews_count=approved_count,
+        approved_plan_inventory_alerts=approved_inv_alerts,
+        low_stock_alerts=low_stock[:8],
     )

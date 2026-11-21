@@ -19,7 +19,6 @@ import {
 } from "lucide-react";
 
 import { EmptyState, ErrorState, LoadingSkeleton } from "@/components/feedback/FeedbackStates";
-import { IncidentPanel } from "@/components/incidents/IncidentPanel";
 import { PageHeader } from "@/components/layout/AppShell";
 import { DatasetSimulationNotice } from "@/components/ui/DatasetSimulationNotice";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -157,7 +156,15 @@ function KitchenQCContent() {
   const latestHuman = activeInspection?.human_reviews.at(-1);
   const latestImage = activeInspection?.images.at(-1);
   const currentAI = latestAI && latestImage?.id === latestAI.image_id ? latestAI : undefined;
-  const currentHuman = latestHuman && currentAI?.id === latestHuman.ai_observation_id ? latestHuman : undefined;
+  const currentHuman =
+    latestHuman &&
+    latestImage &&
+    (currentAI
+      ? latestHuman.ai_observation_id === currentAI.id ||
+        Date.parse(latestHuman.created_at) >= Date.parse(latestImage.created_at)
+      : Date.parse(latestHuman.created_at) >= Date.parse(latestImage.created_at))
+      ? latestHuman
+      : undefined;
 
   useEffect(() => {
     setSelectedFile(null);
@@ -176,23 +183,34 @@ function KitchenQCContent() {
       setRequestRetake(currentHuman.request_retake);
       return;
     }
-    const defaults: HumanCorrectedComponent[] = currentAI ? activeInspection.expected_menu.map((slot) => {
-      const finding = currentAI.comparison_findings.find((item) => item.slot === slot.slot);
-      const statuses: Partial<Record<ComparisonStatusEnum, ObservationStatusEnum>> = {
-        visual_match: "visible", missing_expected: "not_visible", uncertain: "uncertain",
-      };
-      return {
-        slot: slot.slot,
-        confirmed_status: finding ? statuses[finding.status] ?? "needs_review" : "needs_review",
-        observed_food_name: finding?.matched_observation ?? "",
-        officer_note: "",
-      };
-    }) : [];
+    const defaults: HumanCorrectedComponent[] = currentAI
+      ? activeInspection.expected_menu.map((slot) => {
+          const finding = currentAI.comparison_findings.find((item) => item.slot === slot.slot);
+          const statuses: Partial<Record<ComparisonStatusEnum, ObservationStatusEnum>> = {
+            visual_match: "visible",
+            missing_expected: "not_visible",
+            uncertain: "uncertain",
+          };
+          return {
+            slot: slot.slot,
+            confirmed_status: finding ? statuses[finding.status] ?? "needs_review" : "needs_review",
+            observed_food_name: finding?.matched_observation ?? "",
+            officer_note: "",
+          };
+        })
+      : latestImage
+        ? activeInspection.expected_menu.map((slot) => ({
+            slot: slot.slot,
+            confirmed_status: "visible",
+            observed_food_name: slot.recipe_name,
+            officer_note: "",
+          }))
+        : [];
     setHumanDrafts(defaults);
     setHumanNotes(activeInspection.qc_notes ?? "");
     setRequestRetake(false);
-    // Match a new analysis or persisted correction. A background refetch must not erase local input.
-  }, [activeInspection?.id, currentAI?.id, currentHuman?.id]);
+    // Match a new photo, analysis, or persisted correction without erasing local edits.
+  }, [activeInspection?.id, latestImage?.id, currentAI?.id, currentHuman?.id]);
 
   useEffect(() => {
     return () => {
@@ -341,7 +359,7 @@ function KitchenQCContent() {
   if (inspectionsQuery.isLoading) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Pemeriksaan Menu AI" subtitle="Memuat data pemeriksaan visual dapur..." />
+        <PageHeader title="Pemeriksaan Sajian" subtitle="Memuat data pemeriksaan sajian dapur..." />
         <LoadingSkeleton rows={4} />
       </div>
     );
@@ -350,7 +368,7 @@ function KitchenQCContent() {
   if (inspectionsQuery.error) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Pemeriksaan Menu AI" />
+        <PageHeader title="Pemeriksaan Sajian" />
         <ErrorState
           message={inspectionsQuery.error.message}
           onRetry={() => inspectionsQuery.refetch()}
@@ -375,20 +393,20 @@ function KitchenQCContent() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Pemeriksaan Menu AI"
-        subtitle="Bandingkan foto sampel dengan rencana menu dapur. Petugas QC mengonfirmasi temuan sebelum mengirim laporan."
+        title="Pemeriksaan Sajian"
+        subtitle="Unggah foto sampel sajian dan isi daftar periksa komponen terhadap rencana menu. Bantuan AI bersifat opsional."
         badges={
           <div className="flex flex-wrap gap-2">
             <DatasetSimulationNotice compact simulationOnly />
             {provider && (
               <StatusBadge
-                tone={provider.is_live_ai ? "success" : "warning"}
+                tone={provider.is_live_ai ? "success" : "neutral"}
                 label={
                   provider.is_live_ai
-                    ? "Vision AI Terkonfigurasi"
+                    ? "Bantuan AI Siap (Opsional)"
                     : provider.configured
-                    ? "Mode Uji Deterministik"
-                    : "Vision AI Belum Dikonfigurasi"
+                    ? "Mode Uji AI (Opsional)"
+                    : "AI Tidak Aktif — Pemeriksaan Manual Siap"
                 }
               />
             )}
@@ -396,12 +414,9 @@ function KitchenQCContent() {
         }
       />
 
-      {isQC && healthError && (
-        <ErrorState title="Status Vision AI tidak tersedia" message={healthError.message} onRetry={refreshAll} />
-      )}
       {isQC && provider && !provider.configured && !healthError && (
-        <p role="status" className="rounded-xl border border-[#F5D59B] bg-[#FEF6E7] p-4 text-sm text-[#8A5300]">
-          <strong>Konfigurasi Vision AI diperlukan.</strong> Hubungi administrator agar analisis foto dapat dijalankan. Anda masih bisa membuka rencana dan menyimpan foto.
+        <p role="status" className="rounded-xl border border-[#DCE6DE] bg-[#F5F8F5] p-3.5 text-xs text-[#4A6170]">
+          <strong>Pemeriksaan foto dibantu AI sedang tidak aktif.</strong> Anda tetap dapat mengunggah foto sajian, mengisi daftar periksa manual di bawah, dan mengirim laporan seperti biasa.
         </p>
       )}
       {/* Mandatory Food Safety & Visual Scope Disclaimer */}
@@ -804,13 +819,13 @@ function KitchenQCContent() {
                             ) : (
                               <>
                                 <Sparkles className="h-4 w-4" aria-hidden="true" />
-                                <span>{analyzeMutation.isError ? "Coba Analisis Lagi" : "Periksa dengan AI"}</span>
+                                <span>{analyzeMutation.isError ? "Coba Analisis Lagi" : "Bantu Cek Foto dengan AI (Opsional)"}</span>
                               </>
                             )}
                           </button>
                         </div>
                         {!canAnalyze && (
-                          <p className="text-xs text-[#8A5300]">{provider?.configured === false ? "Analisis menunggu konfigurasi Vision AI." : "Analisis menunggu status layanan Vision AI."}</p>
+                          <p className="text-xs text-[#647A87]">Bantuan AI opsional sedang tidak aktif — silakan lanjutkan mengisi daftar periksa manual di bawah.</p>
                         )}
                       </div>
                     ) : (
@@ -910,15 +925,15 @@ function KitchenQCContent() {
                 </section>
               )}
 
-              {/* Human-in-the-Loop Confirmation & Correction (QC Officer) */}
-              {currentAI && isQC && !isLockedForQC && (
+              {/* Human-in-the-Loop Confirmation & Checklist (AI Optional) */}
+              {latestImage && isQC && !isLockedForQC && (
                 <section className="rounded-2xl border border-[#B5DFDA] bg-white p-5 shadow-[0_1px_2px_rgba(22,53,74,0.04)]">
                   <div className="border-b border-[#EEF3EE] pb-3">
                     <h3 className="text-sm font-bold text-[#16354A]">
-                      Konfirmasi & Koreksi Petugas QC (Wajib Sebelum Kirim)
+                      Daftar Periksa & Konfirmasi Petugas QC (Wajib Sebelum Kirim)
                     </h3>
                     <p className="mt-0.5 text-xs text-[#647A87]">
-                      Koreksi Anda disimpan terpisah tanpa mengubah catatan observasi AI asli.
+                      Anda dapat langsung mengisi daftar periksa manual setelah foto diunggah (bantuan AI bersifat opsional).
                     </p>
                   </div>
 
@@ -1190,9 +1205,6 @@ function KitchenQCContent() {
           )}
         </div>
       </div>
-
-      {/* Compromised Ingredient Reporting for QC & Manager */}
-      <IncidentPanel compact />
     </div>
   );
 }
@@ -1202,7 +1214,7 @@ export default function KitchenQCPage() {
     <Suspense
       fallback={
         <div className="space-y-6">
-          <PageHeader title="Pemeriksaan Menu AI" />
+          <PageHeader title="Pemeriksaan Sajian" />
           <LoadingSkeleton rows={4} />
         </div>
       }

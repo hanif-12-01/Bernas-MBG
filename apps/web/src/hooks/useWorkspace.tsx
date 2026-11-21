@@ -10,6 +10,7 @@ import {
 } from "@tanstack/react-query";
 
 import { AuthProvider, useAuth } from "@/hooks/useAuth";
+import { ThemeProvider } from "@/hooks/useTheme";
 import { apiClient } from "@/lib/api/client";
 import type {
   DatasetVersionItem,
@@ -47,7 +48,7 @@ const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 function WorkspaceStateProvider({ children }: { children: React.ReactNode }) {
   const qc = useQueryClient();
-  const { user, isAuthenticated } = useAuth();
+  const { user, isAuthenticated, refreshAuth } = useAuth();
   const [selectedRunId, setSelectedRunIdState] = useState<string | null>(null);
 
   const kitchenScopeKey = user?.active_kitchen_id ?? "anon";
@@ -152,6 +153,7 @@ function WorkspaceStateProvider({ children }: { children: React.ReactNode }) {
   const refreshAll = () => {
     qc.invalidateQueries({ queryKey: ["health"] });
     if (!isAuthenticated) return;
+    void refreshAuth(true);
     qc.invalidateQueries({ queryKey: ["datasets"] });
     qc.invalidateQueries({ queryKey: ["scenarios"] });
     qc.invalidateQueries({ queryKey: ["runs"] });
@@ -159,10 +161,45 @@ function WorkspaceStateProvider({ children }: { children: React.ReactNode }) {
     qc.invalidateQueries({ queryKey: ["qc-inspections"] });
     qc.invalidateQueries({ queryKey: ["manager-summary"] });
     qc.invalidateQueries({ queryKey: ["qc-summary"] });
+    qc.invalidateQueries({ queryKey: ["planner-summary"] });
+    qc.invalidateQueries({ queryKey: ["incidents"] });
+    qc.invalidateQueries({ queryKey: ["inventory"] });
+    qc.invalidateQueries({ queryKey: ["stock-custodian"] });
+    qc.invalidateQueries({ queryKey: ["purchase-documents"] });
+    qc.invalidateQueries({ queryKey: ["goods-receipts"] });
+    qc.invalidateQueries({ queryKey: ["effective-operational-plan"] });
+    qc.invalidateQueries({ queryKey: ["operational-plans"] });
     if (selectedRunId) {
       qc.invalidateQueries({ queryKey: ["run", kitchenScopeKey, selectedRunId] });
     }
   };
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const syncOperationalState = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+      void refreshAuth(true);
+      qc.invalidateQueries({ queryKey: ["incidents"] });
+      qc.invalidateQueries({ queryKey: ["stock-custodian"] });
+      qc.invalidateQueries({ queryKey: ["effective-operational-plan"] });
+      qc.invalidateQueries({ queryKey: ["operational-plans"] });
+      qc.invalidateQueries({ queryKey: ["manager-summary"] });
+      qc.invalidateQueries({ queryKey: ["qc-summary"] });
+      qc.invalidateQueries({ queryKey: ["planner-summary"] });
+      qc.invalidateQueries({ queryKey: ["purchase-documents"] });
+      qc.invalidateQueries({ queryKey: ["goods-receipts"] });
+    };
+    const timerId = window.setInterval(syncOperationalState, 4000);
+    window.addEventListener("focus", syncOperationalState);
+    document.addEventListener("visibilitychange", syncOperationalState);
+    return () => {
+      window.clearInterval(timerId);
+      window.removeEventListener("focus", syncOperationalState);
+      document.removeEventListener("visibilitychange", syncOperationalState);
+    };
+  }, [isAuthenticated, qc, refreshAuth]);
 
   const value: WorkspaceContextValue = {
     health: healthQuery.data,
@@ -213,9 +250,11 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <WorkspaceStateProvider>{children}</WorkspaceStateProvider>
-      </AuthProvider>
+      <ThemeProvider>
+        <AuthProvider>
+          <WorkspaceStateProvider>{children}</WorkspaceStateProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }

@@ -899,6 +899,10 @@ class InventoryLotORM(Base):
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     expiry_known: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     received_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    supplier_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    purchase_document_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("purchase_documents.id", ondelete="SET NULL"), nullable=True
+    )
     verified_physical_raw_g: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     verification_status: Mapped[str] = mapped_column(String(32), nullable=False, default="VERIFIED")
@@ -1253,6 +1257,19 @@ class IngredientIncidentORM(Base):
     recovery_event_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("recovery_events.id", ondelete="SET NULL"), nullable=True
     )
+    disposal_authorized: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    disposal_authorized_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    disposal_authorized_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    disposal_executed_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    disposal_executed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
@@ -1475,4 +1492,192 @@ class OperationalPlanAssignmentORM(Base):
         ),
         Index("ix_op_plans_kitchen_status", "kitchen_id", "operational_status"),
         Index("ix_op_plans_review_id", "menu_review_id"),
+    )
+
+
+class KitchenStockCustodianAssignmentORM(Base):
+    __tablename__ = "kitchen_stock_custodian_assignments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kitchen_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("kitchens.id", ondelete="CASCADE"), nullable=False
+    )
+    custodian_user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    assigned_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="ACTIVE")
+    # Non-null ONLY when status == 'ACTIVE', enforcing <= 1 active stock custodian per kitchen at DB level.
+    active_kitchen_key: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, unique=True
+    )
+    effective_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    effective_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    revoked_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    __table_args__ = (
+        CheckConstraint("status IN ('ACTIVE','REVOKED','EXPIRED')", name="ck_custodian_status"),
+        Index("ix_custodian_kitchen_status", "kitchen_id", "status"),
+        Index("ix_custodian_user_status", "custodian_user_id", "status"),
+    )
+
+
+class PurchaseDocumentORM(Base):
+    __tablename__ = "purchase_documents"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kitchen_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("kitchens.id", ondelete="CASCADE"), nullable=False
+    )
+    dataset_version_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("dataset_versions.id"), nullable=False
+    )
+    linked_run_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("optimization_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    linked_recovery_event_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("recovery_events.id", ondelete="SET NULL"), nullable=True
+    )
+    supplier_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    supplier_contact: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    invoice_number: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    purchase_date: Mapped[date] = mapped_column(Date, nullable=False)
+    total_amount_idr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    evidence_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="NO_EVIDENCE"
+    )
+    document_storage_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    document_mime_type: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    document_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    document_size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    document_original_filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    exif_stripped: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    recorded_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    lines: Mapped[List["PurchaseDocumentLineORM"]] = relationship(
+        back_populates="purchase_document", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "evidence_status IN ('NO_EVIDENCE','RECEIPT_UPLOADED','GOODS_RECEIVED','VERIFIED_MATCH','DISCREPANCY_FLAGGED')",
+            name="ck_purchase_doc_evidence_status",
+        ),
+        Index("ix_purchase_docs_kitchen_date", "kitchen_id", "purchase_date"),
+        Index("ix_purchase_docs_kitchen_status", "kitchen_id", "evidence_status"),
+    )
+
+
+class PurchaseDocumentLineORM(Base):
+    __tablename__ = "purchase_document_lines"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    purchase_document_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("purchase_documents.id", ondelete="CASCADE"), nullable=False
+    )
+    kitchen_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("kitchens.id", ondelete="CASCADE"), nullable=False
+    )
+    ingredient_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("ingredients.id", ondelete="SET NULL"), nullable=True
+    )
+    ingredient_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    item_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    quantity_raw_g: Mapped[float] = mapped_column(Float, nullable=False)
+    unit_label: Mapped[str] = mapped_column(String(32), nullable=False, default="kg")
+    unit_price_idr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    line_total_idr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    lot_code_hint: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    expiry_date_hint: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    purchase_document: Mapped["PurchaseDocumentORM"] = relationship(back_populates="lines")
+
+    __table_args__ = (
+        CheckConstraint("quantity_raw_g > 0", name="ck_purchase_line_qty_positive"),
+        Index("ix_purchase_lines_doc", "purchase_document_id"),
+    )
+
+
+class GoodsReceiptRecordORM(Base):
+    __tablename__ = "goods_receipt_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kitchen_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("kitchens.id", ondelete="CASCADE"), nullable=False
+    )
+    purchase_document_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("purchase_documents.id", ondelete="SET NULL"), nullable=True
+    )
+    dataset_version_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("dataset_versions.id"), nullable=False
+    )
+    ingredient_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("ingredients.id", ondelete="SET NULL"), nullable=True
+    )
+    ingredient_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    lot_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("inventory_lots.id", ondelete="SET NULL"), nullable=True
+    )
+    lot_code: Mapped[str] = mapped_column(String(128), nullable=False)
+    received_raw_g: Mapped[float] = mapped_column(Float, nullable=False)
+    expiry_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    supplier_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    condition_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="GOOD"
+    )
+    received_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    __table_args__ = (
+        CheckConstraint("received_raw_g > 0", name="ck_goods_receipt_qty_positive"),
+        CheckConstraint(
+            "condition_status IN ('GOOD','DAMAGED','QUARANTINED','REJECTED')",
+            name="ck_goods_receipt_condition",
+        ),
+        Index("ix_goods_receipts_kitchen_date", "kitchen_id", "received_at"),
+        Index("ix_goods_receipts_purchase_doc", "purchase_document_id"),
     )
